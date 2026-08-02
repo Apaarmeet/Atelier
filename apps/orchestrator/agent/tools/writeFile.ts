@@ -1,22 +1,22 @@
+import { writeFileToPod } from "../k8s";
+
 /**
  * Tool: write_file
- * Description: Write content to a file (creates or overwrites).
+ * Description: Writes content to a file inside the Kubernetes Sandbox pod.
  */
-export async function writeFileTool(args: { file_path: string; content: string }): Promise<string> {
+export async function writeFileTool(args: { file_path: string; content: string }, podName: string): Promise<string> {
   try {
     const { file_path, content } = args;
 
-    if (typeof Bun !== "undefined") {
-      await Bun.write(file_path, content);
-    } else {
-      const fs = await import("node:fs/promises");
-      const path = await import("node:path");
-      await fs.mkdir(path.dirname(file_path), { recursive: true });
-      await fs.writeFile(file_path, content, "utf-8");
-    }
+    // Write the file directly to the Pod
+    await writeFileToPod(podName, file_path, content);
 
-    return JSON.stringify({ success: true, file_path, message: "File written successfully." });
+    return JSON.stringify({
+      success: true,
+      file_path,
+      message: "File written successfully in the Pod.",
+    });
   } catch (err: any) {
-    return JSON.stringify({ error: `Failed to write file: ${err.message}` });
+    return JSON.stringify({ error: `Failed to write file in Pod: ${err.message}` });
   }
 }

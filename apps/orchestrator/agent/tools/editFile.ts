@@ -1,18 +1,15 @@
+import { readFileFromPod, writeFileToPod } from "../k8s";
+
 /**
  * Tool: edit_file
- * Description: Replaces old_string with new_string in a specified file.
+ * Description: Replaces old_string with new_string in a specified file inside the Kubernetes Sandbox pod.
  */
-export async function editFileTool(args: { file_path: string; old_string: string; new_string: string }): Promise<string> {
+export async function editFileTool(args: { file_path: string; old_string: string; new_string: string }, podName: string): Promise<string> {
   try {
     const { file_path, old_string, new_string } = args;
 
-    let content: string;
-    if (typeof Bun !== "undefined") {
-      content = await Bun.file(file_path).text();
-    } else {
-      const fs = await import("node:fs/promises");
-      content = await fs.readFile(file_path, "utf-8");
-    }
+    // Read file from pod
+    const content = await readFileFromPod(podName, file_path);
 
     if (!content.includes(old_string)) {
       return JSON.stringify({ error: `Could not find target text 'old_string' in ${file_path}` });
@@ -20,15 +17,11 @@ export async function editFileTool(args: { file_path: string; old_string: string
 
     const updatedContent = content.replace(old_string, new_string);
 
-    if (typeof Bun !== "undefined") {
-      await Bun.write(file_path, updatedContent);
-    } else {
-      const fs = await import("node:fs/promises");
-      await fs.writeFile(file_path, updatedContent, "utf-8");
-    }
+    // Write file back to pod
+    await writeFileToPod(podName, file_path, updatedContent);
 
-    return JSON.stringify({ success: true, file_path, message: "File edited successfully." });
+    return JSON.stringify({ success: true, file_path, message: "File edited successfully in Pod." });
   } catch (err: any) {
-    return JSON.stringify({ error: `Failed to edit file: ${err.message}` });
+    return JSON.stringify({ error: `Failed to edit file in Pod: ${err.message}` });
   }
 }

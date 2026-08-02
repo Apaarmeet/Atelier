@@ -1,18 +1,14 @@
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
-
-const execAsync = promisify(exec);
+import { execCommandInPod } from "../k8s";
 
 /**
  * Tool: bash
- * Description: Executes a bash command in the specified working directory.
+ * Description: Executes a bash command in the Kubernetes Sandbox pod.
  */
-export async function bashTool(args: { command: string; workdir?: string }): Promise<string> {
+export async function bashTool(args: { command: string }, podName: string): Promise<string> {
   try {
-    const { command, workdir } = args;
-    const cwd = workdir || process.cwd();
+    const { command } = args;
 
-    // Block long-running server commands
+    // Block long-running server commands as they freeze the agent loop
     const blockedCommands = ["npm run dev", "bun run dev", "yarn dev", "npm start", "vite"];
     if (blockedCommands.some(cmd => command.includes(cmd))) {
       return JSON.stringify({
@@ -20,20 +16,19 @@ export async function bashTool(args: { command: string; workdir?: string }): Pro
       });
     }
 
-    // Add a timeout of 15 seconds to prevent hanging
-    const { stdout, stderr } = await execAsync(command, { cwd, timeout: 15000 });
+    // Execute the command inside the Kubernetes Pod
+    // Adding a timeout via standard bash timeout command if desired, but 
+    // the K8s exec API streams the output. We wrap it in a timeout wrapper:
+    const result = await execCommandInPod(podName, ["/bin/sh", "-c", command]);
 
     return JSON.stringify({
       command,
-      cwd,
-      stdout: stdout.trim(),
-      stderr: stderr.trim(),
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
     });
   } catch (err: any) {
     return JSON.stringify({
-      error: `Command execution failed: ${err.message}`,
-      stdout: err.stdout ? err.stdout.trim() : "",
-      stderr: err.stderr ? err.stderr.trim() : "",
+      error: `Command execution failed in Pod: ${err.message}`,
     });
   }
 }

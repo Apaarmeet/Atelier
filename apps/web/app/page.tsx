@@ -1,128 +1,93 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
-export default function Home() {
-  const [prompt, setPrompt] = useState("");
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [sessionCount, setSessionCount] = useState(0);
-  const [loading, setLoading] = useState(false);
+export default function AuthPage() {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const router = useRouter();
 
-  useEffect(() => {
-    // Fetch session count on mount
-    fetch("http://localhost:3001/api/sessions/count")
-      .then((res) => res.json())
-      .then((data) => setSessionCount(data.count || 0))
-      .catch((err) => console.error("Error fetching session count", err));
-  }, []);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    const endpoint = isLogin ? "/api/auth/login" : "/api/auth/signup";
+    const body = isLogin ? { email, password } : { name, email, password };
 
-  const handleStartSession = async () => {
-    if (!prompt) return;
-    setLoading(true);
     try {
-      const res = await fetch("http://localhost:3001/api/session", {
+      const res = await fetch(`http://localhost:3001${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initialPrompt: prompt }),
+        body: JSON.stringify(body),
       });
+
       const data = await res.json();
-      
-      if (data.previewUrl) {
-        // Wait a few seconds for the Vite server to boot up before showing iframe
-        setTimeout(() => {
-          setPreviewUrl(data.previewUrl);
-        }, 4000);
-      }
-      setSessionCount(prev => prev + 1);
-    } catch (err) {
-      console.error("Error starting session:", err);
+      if (!res.ok) throw new Error(data.error || "Authentication failed");
+
+      // Save user to localStorage (simple auth for V1)
+      localStorage.setItem("user", JSON.stringify(data.user));
+      router.push("/dashboard");
+    } catch (err: any) {
+      setError(err.message);
     }
-    setLoading(false);
   };
 
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif" }}>
-      {/* Left Panel */}
-      <div style={{ flex: 1, padding: "20px", display: "flex", flexDirection: "column", borderRight: "1px solid #eaeaea", backgroundColor: "#fff", zIndex: 10 }}>
-        <h1 style={{ fontSize: "24px", fontWeight: "bold", marginBottom: "20px" }}>Lovable Agent</h1>
-        
-        {/* Simple Chart / Stat */}
-        <div style={{ margin: "10px 0 30px", padding: "20px", background: "#f9f9f9", borderRadius: "8px", border: "1px solid #eaeaea" }}>
-          <h3 style={{ margin: "0 0 15px 0", fontSize: "16px", color: "#333" }}>Usage Stats</h3>
-          
-          <div style={{ display: "flex", alignItems: "flex-end", height: "100px", gap: "12px", borderBottom: "1px solid #ccc", paddingBottom: "5px" }}>
-            <div style={{ 
-              width: "40px", 
-              background: "linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)", 
-              height: `${Math.min(sessionCount * 10, 100)}%`, 
-              minHeight: "5px",
-              transition: "height 0.5s ease-out",
-              borderRadius: "4px 4px 0 0"
-            }}></div>
-            <div style={{ 
-              width: "40px", 
-              background: "#e5e7eb", 
-              height: "100%",
-              borderRadius: "4px 4px 0 0"
-            }}></div>
-          </div>
-          <p style={{ marginTop: "15px", fontSize: "14px" }}>Total Sessions Created: <strong>{sessionCount}</strong></p>
-        </div>
+    <div className="flex items-center justify-center min-h-screen bg-neutral-950 text-white">
+      <div className="w-full max-w-md p-8 bg-neutral-900 rounded-2xl shadow-2xl border border-neutral-800">
+        <h1 className="text-3xl font-bold mb-2 text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+          Lovable Agent
+        </h1>
+        <p className="text-neutral-400 text-center mb-8">
+          {isLogin ? "Welcome back. Let's build something." : "Create an account to start building."}
+        </p>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px", flexGrow: 1 }}>
-          <label style={{ fontWeight: "600", fontSize: "14px" }}>Describe your React App:</label>
-          <textarea 
-            placeholder="Build a modern frontend web application with a responsive hero section, features grid, and dark mode UI..."
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            style={{ 
-              width: "100%", 
-              height: "200px", 
-              padding: "15px", 
-              borderRadius: "8px",
-              border: "1px solid #ccc",
-              resize: "none",
-              fontSize: "14px",
-              fontFamily: "inherit"
-            }}
+        {error && <div className="mb-4 p-3 bg-red-900/50 border border-red-500 text-red-200 rounded-lg text-sm">{error}</div>}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {!isLogin && (
+            <input
+              type="text"
+              placeholder="Full Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="px-4 py-3 bg-neutral-950 border border-neutral-800 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+              required
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email Address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="px-4 py-3 bg-neutral-950 border border-neutral-800 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+            required
           />
-          <button 
-            onClick={handleStartSession} 
-            disabled={loading || !prompt}
-            style={{ 
-              padding: "12px 20px", 
-              background: loading || !prompt ? "#ccc" : "#000", 
-              color: "#fff", 
-              cursor: loading || !prompt ? "not-allowed" : "pointer",
-              borderRadius: "8px",
-              fontWeight: "bold",
-              marginTop: "10px",
-              border: "none"
-            }}
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="px-4 py-3 bg-neutral-950 border border-neutral-800 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+            required
+          />
+          <button
+            type="submit"
+            className="mt-2 py-3 bg-white text-black font-semibold rounded-lg hover:bg-neutral-200 transition-colors"
           >
-            {loading ? "Initializing Workspace..." : "Generate Application"}
+            {isLogin ? "Sign In" : "Sign Up"}
           </button>
-        </div>
-      </div>
+        </form>
 
-      {/* Right Panel - Preview */}
-      <div style={{ flex: 2, background: "#f0f0f0", position: "relative" }}>
-        {previewUrl ? (
-           <iframe 
-             src={previewUrl} 
-             style={{ width: "100%", height: "100%", border: "none", backgroundColor: "#fff" }} 
-             title="App Preview" 
-           />
-        ) : (
-           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
-              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: "20px", opacity: 0.5 }}>
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <line x1="3" y1="9" x2="21" y2="9"></line>
-                <line x1="9" y1="21" x2="9" y2="9"></line>
-              </svg>
-              <p>Generated application preview will appear here.</p>
-           </div>
-        )}
+        <p className="mt-6 text-center text-sm text-neutral-500">
+          {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
+          <button onClick={() => setIsLogin(!isLogin)} className="text-blue-400 hover:underline">
+            {isLogin ? "Sign Up" : "Sign In"}
+          </button>
+        </p>
       </div>
     </div>
   );

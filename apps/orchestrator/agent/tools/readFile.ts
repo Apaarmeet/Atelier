@@ -1,21 +1,18 @@
+import { readFileFromPod } from "../k8s";
+
 /**
  * Tool: Read_file
- * Description: Reads content from a file at a given file path.
+ * Description: Reads content from a file inside the Kubernetes Sandbox pod.
  */
-export async function readFileTool(args: { file_path: string }): Promise<string> {
+export async function readFileTool(args: { file_path: string }, podName: string): Promise<string> {
   try {
     const { file_path } = args;
-    let content: string;
-
-    if (typeof Bun !== "undefined") {
-      content = await Bun.file(file_path).text();
-    } else {
-      const fs = await import("node:fs/promises");
-      content = await fs.readFile(file_path, "utf-8");
-    }
+    
+    // Read the file directly from the Pod
+    const content = await readFileFromPod(podName, file_path);
 
     return JSON.stringify({ file_path, content });
   } catch (err: any) {
-    return JSON.stringify({ error: `Failed to read file: ${err.message}` });
+    return JSON.stringify({ error: `Failed to read file in Pod: ${err.message}` });
   }
 }

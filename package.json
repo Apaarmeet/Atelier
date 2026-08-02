@@ -9,9 +9,13 @@
     "check-types": "turbo run check-types"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "autoprefixer": "^10.5.4",
     "dotenv": "^17.4.2",
+    "postcss": "^8.5.25",
     "prettier": "^3.7.4",
     "prisma": "^7.9.1",
+    "tailwindcss": "^4.3.3",
     "turbo": "^2.10.7",
     "typescript": "5.9.2"
   },
@@ -29,7 +33,9 @@
     "packages/*"
   ],
   "dependencies": {
+    "@kubernetes/client-node": "^1.4.0",
     "@prisma/adapter-pg": "^7.9.1",
+    "kubernetes": "^1.0.0",
     "openai": "^7.1.0"
   }
 }

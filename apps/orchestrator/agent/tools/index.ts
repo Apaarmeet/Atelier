@@ -4,7 +4,7 @@ import { editFileTool } from "./editFile";
 import { bashTool } from "./bash";
 
 // Map tool names to their implementation functions
-export const toolRegistry: Record<string, (args: any) => Promise<string>> = {
+export const toolRegistry: Record<string, (args: any, podName: string) => Promise<string>> = {
   Read_file: readFileTool,
   read_file: readFileTool,
   write_file: writeFileTool,
@@ -15,7 +15,7 @@ export const toolRegistry: Record<string, (args: any) => Promise<string>> = {
 /**
  * Central tool executor called by the agent loop
  */
-export async function executeTool(name: string, args: any): Promise<string> {
+export async function executeTool(name: string, args: any, podName: string): Promise<string> {
   const toolFn = toolRegistry[name];
 
   if (!toolFn) {
@@ -23,7 +23,7 @@ export async function executeTool(name: string, args: any): Promise<string> {
   }
 
   try {
-    return await toolFn(args);
+    return await toolFn(args, podName);
   } catch (err: any) {
     return JSON.stringify({ error: `Execution error in tool '${name}': ${err.message}` });
   }

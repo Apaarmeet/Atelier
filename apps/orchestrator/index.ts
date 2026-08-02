@@ -1,24 +1,12 @@
-import { config } from "dotenv";
+import "./env";
 import express from "express";
 import cors from "cors";
 import { agentLoop } from "./agent/loop";
 import { prisma } from "@repo/db";
-import fs from "fs/promises";
-import path from "path";
-import { exec } from "child_process";
-import { promisify } from "util";
+import { createSandboxPod, forwardPodPort } from "./agent/k8s";
 
 // Load environment variables
-config();
-
-const execAsync = promisify(exec);
 const PORT = process.env.PORT || 3001;
-let nextDevPort = 5173; // Starting port for Vite servers
-
-const workspacesDir = path.join(process.cwd(), "workspaces");
-
-// Ensure workspaces directory exists
-fs.mkdir(workspacesDir, { recursive: true }).catch(() => {});
 
 const app = express();
 
@@ -29,22 +17,10 @@ app.use(express.json());
 // Initialize new session and start agent
 app.post("/api/session", async (req, res) => {
   try {
-    const { initialPrompt } = req.body;
+    const { initialPrompt, userId } = req.body;
     
-    if (!initialPrompt) {
-      return res.status(400).json({ error: "initialPrompt is required" });
-    }
-
-    // Get or create a dummy user
-    let user = await prisma.user.findFirst();
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          name: "Test User",
-          email: "test@example.com",
-          password: "password123",
-        },
-      });
+    if (!initialPrompt || !userId) {
+      return res.status(400).json({ error: "initialPrompt and userId are required" });
     }
 
     // Generate a random workspace ID
@@ -53,42 +29,149 @@ app.post("/api/session", async (req, res) => {
     // Create session in DB
     const session = await prisma.session.create({
       data: {
-        userId: user.id,
+        userId: userId,
         workspaceId: workspaceId,
       },
     });
 
-    const targetDir = path.join(workspacesDir, workspaceId);
-
-    // Copy the base template to the new workspace directory
-    const baseTemplateDir = path.join(process.cwd(), "base-template");
-    await execAsync(`cp -R ${baseTemplateDir} ${targetDir}`);
-
-    // Start the dev server on a unique port
-    const devPort = nextDevPort++;
-    console.log(`Starting dev server for ${workspaceId} on port ${devPort}...`);
-    
-    // Spawn the dev server process
-    const proc = Bun.spawn(["bun", "run", "dev", "--port", devPort.toString()], {
-      cwd: targetDir,
-      stdout: "ignore", 
-      stderr: "ignore",
+    // Save initial prompt to DB
+    await prisma.message.create({
+      data: {
+        sessionId: session.id,
+        role: "user",
+        content: initialPrompt,
+      }
     });
 
-    // Run the agent loop in the background
-    agentLoop(initialPrompt, targetDir).catch(err => {
+    console.log(`Spinning up Kubernetes Sandbox for session ${session.id}...`);
+    // Create the Kubernetes Pod using the pre-built Docker image
+    const podName = await createSandboxPod(session.id);
+    
+    // Expose the pod's port to a random localhost port
+    const localPort = await forwardPodPort(podName);
+    const previewUrl = `http://localhost:${localPort}`;
+    console.log(`Pod exposed at ${previewUrl}`);
+
+    // Run the agent loop in the background, passing the sessionId and podName
+    agentLoop(session.id, podName).catch(err => {
       console.error(`Agent error for session ${session.id}:`, err);
     });
 
     return res.json({
       sessionId: session.id,
       workspaceId: workspaceId,
-      previewUrl: `http://localhost:${devPort}`,
-      message: "Session initialized and agent started.",
+      podName: podName,
+      previewUrl: previewUrl,
+      message: "Sandbox Pod initialized and agent started.",
     });
 
   } catch (err: any) {
     console.error(err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Send a new message to an existing session
+app.post("/api/session/:id/message", async (req, res) => {
+  try {
+    const { content, podName } = req.body;
+    const sessionId = req.params.id;
+
+    if (!content || !podName) {
+      return res.status(400).json({ error: "content and podName are required" });
+    }
+
+    // Save user message to DB
+    await prisma.message.create({
+      data: {
+        sessionId,
+        role: "user",
+        content,
+      }
+    });
+
+    // Run the agent loop in the background
+    agentLoop(sessionId, podName).catch(err => {
+      console.error(`Agent error for session ${sessionId}:`, err);
+    });
+
+    return res.json({ success: true, message: "Message queued and agent started." });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Get user's sessions
+app.get("/api/users/:id/sessions", async (req, res) => {
+  try {
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.params.id },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'asc' } // Get the first message as a summary
+        }
+      }
+    });
+    return res.json({ sessions });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Get messages for a session
+app.get("/api/sessions/:id/messages", async (req, res) => {
+  try {
+    const messages = await prisma.message.findMany({
+      where: { sessionId: req.params.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    return res.json({ messages });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-establish or fetch the preview URL for a session
+app.get("/api/sessions/:id/preview", async (req, res) => {
+  try {
+    const session = await prisma.session.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    
+    // Check if pod exists
+    const podName = `workspace-${session.id.toLowerCase()}`;
+    const localPort = await forwardPodPort(podName);
+    return res.json({ previewUrl: `http://localhost:${localPort}`, podName });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Auth endpoints
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || user.password !== password) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    return res.json({ user });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    const user = await prisma.user.create({
+      data: { name, email, password }
+    });
+    return res.json({ user });
+  } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
