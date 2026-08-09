@@ -1,4 +1,4 @@
-import { writeFileToPod } from "../k8s";
+import { writeFileToPod } from "../e2b";
 
 /**
  * Tool: write_file

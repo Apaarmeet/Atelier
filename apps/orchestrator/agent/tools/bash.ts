@@ -1,4 +1,4 @@
-import { execCommandInPod } from "../k8s";
+import { execCommandInPod } from "../e2b";
 
 /**
  * Tool: bash
@@ -16,9 +16,9 @@ export async function bashTool(args: { command: string }, podName: string): Prom
       });
     }
 
-    // Execute the command inside the Kubernetes Pod
+    // Execute the command inside the E2B Sandbox
     // Adding a timeout via standard bash timeout command if desired, but 
-    // the K8s exec API streams the output. We wrap it in a timeout wrapper:
+    // the E2B SDK executes the command. We wrap it in a timeout wrapper:
     const result = await execCommandInPod(podName, ["/bin/sh", "-c", command]);
 
     return JSON.stringify({

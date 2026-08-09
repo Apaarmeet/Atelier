@@ -1,4 +1,4 @@
-import { readFileFromPod } from "../k8s";
+import { readFileFromPod } from "../e2b";
 
 /**
  * Tool: Read_file

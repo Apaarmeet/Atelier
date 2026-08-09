@@ -28,7 +28,7 @@ export async function agentLoop(sessionId: string, podName: string) {
     {
       role: "system",
       content: `You are a helpful coding assistant equipped with tools to read files, write files, edit files, and execute bash commands to assist the user.
-Your current working directory for the user's React project is: /app
+Your current working directory for the user's React project is: /home/user/app
 Always use this directory as the base path or working directory when manipulating files or running bash commands.`,
     },
   ];

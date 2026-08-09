@@ -8,9 +8,9 @@
     "start": "tsx index.ts"
   },
   "dependencies": {
-    "@kubernetes/client-node": "^1.4.0",
     "@repo/db": "workspace:*",
     "cors": "^2.8.6",
+    "e2b": "^2.38.2",
     "express": "^5.2.1"
   },
   "devDependencies": {

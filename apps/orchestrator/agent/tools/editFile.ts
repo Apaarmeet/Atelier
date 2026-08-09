@@ -1,4 +1,4 @@
-import { readFileFromPod, writeFileToPod } from "../k8s";
+import { readFileFromPod, writeFileToPod } from "../e2b";
 
 /**
  * Tool: edit_file

@@ -33,9 +33,7 @@
     "packages/*"
   ],
   "dependencies": {
-    "@kubernetes/client-node": "^1.4.0",
     "@prisma/adapter-pg": "^7.9.1",
-    "kubernetes": "^1.0.0",
     "openai": "^7.1.0"
   }
 }

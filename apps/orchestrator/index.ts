@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { agentLoop } from "./agent/loop";
 import { prisma } from "@repo/db";
-import { createSandboxPod, forwardPodPort } from "./agent/k8s";
+import { createSandboxPod, forwardPodPort } from "./agent/e2b";
 
 // Load environment variables
 const PORT = process.env.PORT || 3001;
@@ -43,14 +43,14 @@ app.post("/api/session", async (req, res) => {
       }
     });
 
-    console.log(`Spinning up Kubernetes Sandbox for session ${session.id}...`);
-    // Create the Kubernetes Pod using the pre-built Docker image
+    console.log(`Spinning up E2B Sandbox for session ${session.id}...`);
+    // Create the Sandbox
     const podName = await createSandboxPod(session.id);
     
-    // Expose the pod's port to a random localhost port
-    const localPort = await forwardPodPort(podName);
-    const previewUrl = `http://localhost:${localPort}`;
-    console.log(`Pod exposed at ${previewUrl}`);
+    // Expose the pod's port
+    const portData = await forwardPodPort(podName);
+    const previewUrl = portData.url;
+    console.log(`Sandbox exposed at ${previewUrl}`);
 
     // Run the agent loop in the background, passing the sessionId and podName
     agentLoop(session.id, podName).catch(err => {
@@ -62,7 +62,7 @@ app.post("/api/session", async (req, res) => {
       workspaceId: workspaceId,
       podName: podName,
       previewUrl: previewUrl,
-      message: "Sandbox Pod initialized and agent started.",
+      message: "Sandbox initialized and agent started.",
     });
 
   } catch (err: any) {
@@ -143,8 +143,8 @@ app.get("/api/sessions/:id/preview", async (req, res) => {
     
     // Check if pod exists
     const podName = `workspace-${session.id.toLowerCase()}`;
-    const localPort = await forwardPodPort(podName);
-    return res.json({ previewUrl: `http://localhost:${localPort}`, podName });
+    const portData = await forwardPodPort(podName);
+    return res.json({ previewUrl: portData.url, podName });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
