@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { ORCHESTRATOR_URL } from "../../lib/config";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<any[]>([]);
@@ -19,7 +20,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     setUser(u);
 
     // Fetch history
-    fetch(`http://localhost:3001/api/users/${u.id}/sessions`)
+    fetch(`${ORCHESTRATOR_URL}/api/users/${u.id}/sessions`)
       .then(res => res.json())
       .then(data => setSessions(data.sessions || []))
       .catch(err => console.error("Error fetching sessions", err));

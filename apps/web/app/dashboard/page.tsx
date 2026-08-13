@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ORCHESTRATOR_URL } from "../../lib/config";
 
 export default function NewDashboardPage() {
   const [prompt, setPrompt] = useState("");
@@ -18,7 +19,7 @@ export default function NewDashboardPage() {
       if (!userStr) return router.push("/");
       const user = JSON.parse(userStr);
 
-      const res = await fetch("http://localhost:3001/api/session", {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initialPrompt: prompt, userId: user.id }),

@@ -4,9 +4,9 @@ import { execCommandInPod } from "../e2b";
  * Tool: bash
  * Description: Executes a bash command in the Kubernetes Sandbox pod.
  */
-export async function bashTool(args: { command: string }, podName: string): Promise<string> {
+export async function bashTool(args: { command: string; workdir?: string }, podName: string): Promise<string> {
   try {
-    const { command } = args;
+    const { command, workdir } = args;
 
     // Block long-running server commands as they freeze the agent loop
     const blockedCommands = ["npm run dev", "bun run dev", "yarn dev", "npm start", "vite"];
@@ -17,9 +17,7 @@ export async function bashTool(args: { command: string }, podName: string): Prom
     }
 
     // Execute the command inside the E2B Sandbox
-    // Adding a timeout via standard bash timeout command if desired, but 
-    // the E2B SDK executes the command. We wrap it in a timeout wrapper:
-    const result = await execCommandInPod(podName, ["/bin/sh", "-c", command]);
+    const result = await execCommandInPod(podName, command, workdir);
 
     return JSON.stringify({
       command,

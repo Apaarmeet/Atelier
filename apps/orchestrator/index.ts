@@ -24,7 +24,7 @@ app.post("/api/session", async (req, res) => {
     }
 
     // Generate a random workspace ID
-    const workspaceId = `workspace-${Date.now()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
     
     // Create session in DB
     const session = await prisma.session.create({
@@ -141,10 +141,10 @@ app.get("/api/sessions/:id/preview", async (req, res) => {
     });
     if (!session) return res.status(404).json({ error: "Session not found" });
     
-    // Check if pod exists
-    const podName = `workspace-${session.id.toLowerCase()}`;
+    // Use stored sandboxId if available, or fallback
+    const podName = session.sandboxId || session.id;
     const portData = await forwardPodPort(podName);
-    return res.json({ previewUrl: portData.url, podName });
+    return res.json({ previewUrl: portData.url, podName: session.sandboxId || podName });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

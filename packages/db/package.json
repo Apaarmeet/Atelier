@@ -5,10 +5,11 @@
   "main": "index.ts",
   "types": "index.ts",
   "dependencies": {
-    "@prisma/client": "7.9.1",
     "@prisma/adapter-pg": "7.9.1",
-    "pg": "^8.11.0",
-    "dotenv": "^16.4.5"
+    "@prisma/client": "7.9.1",
+    "@types/node": "^26.2.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

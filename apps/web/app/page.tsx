@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ORCHESTRATOR_URL } from "../lib/config";
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -18,7 +19,7 @@ export default function AuthPage() {
     const body = isLogin ? { email, password } : { name, email, password };
 
     try {
-      const res = await fetch(`http://localhost:3001${endpoint}`, {
+      const res = await fetch(`${ORCHESTRATOR_URL}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

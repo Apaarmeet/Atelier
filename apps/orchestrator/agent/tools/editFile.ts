@@ -12,10 +12,10 @@ export async function editFileTool(args: { file_path: string; old_string: string
     const content = await readFileFromPod(podName, file_path);
 
     if (!content.includes(old_string)) {
-      return JSON.stringify({ error: `Could not find target text 'old_string' in ${file_path}` });
+      return JSON.stringify({ error: `Could not find target text '${old_string}' in ${file_path}` });
     }
 
-    const updatedContent = content.replace(old_string, new_string);
+    const updatedContent = content.replace(old_string, () => new_string);
 
     // Write file back to pod
     await writeFileToPod(podName, file_path, updatedContent);
