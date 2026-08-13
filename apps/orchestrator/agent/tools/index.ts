@@ -3,12 +3,18 @@ import { writeFileTool } from "./writeFile";
 import { editFileTool } from "./editFile";
 import { bashTool } from "./bash";
 
-// Map tool names to their implementation functions
+// Map tool names to their implementation functions (supports both tool_file and short names)
 export const toolRegistry: Record<string, (args: any, podName: string) => Promise<string>> = {
   Read_file: readFileTool,
   read_file: readFileTool,
+  read: readFileTool,
+  
   write_file: writeFileTool,
+  write: writeFileTool,
+
   edit_file: editFileTool,
+  edit: editFileTool,
+
   bash: bashTool,
 };
 

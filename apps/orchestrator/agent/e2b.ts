@@ -77,7 +77,129 @@ export async function createSandboxPod(sessionId: string): Promise<string> {
     console.log(`E2B Sandbox created with real E2B ID [${realE2bId}] for session [${sessionId}]. Setting up application...`);
     
     // Ensure working directory exists
-    await sandbox.commands.run('mkdir -p /home/user/app').catch(() => {});
+    await sandbox.commands.run('mkdir -p /home/user/app/src /home/user/app/public').catch(() => {});
+
+    // Check if /home/user/app/package.json exists; if missing (default 'base' sandbox), populate template
+    try {
+      const pkgCheck = await sandbox.commands.run('test -f /home/user/app/package.json && echo "exists" || echo "missing"');
+      if (pkgCheck.stdout.trim() !== "exists") {
+        console.log("Populating React + Vite + Tailwind template in default sandbox...");
+        
+        const packageJson = {
+          name: "react-app",
+          private: true,
+          version: "0.0.0",
+          type: "module",
+          scripts: {
+            "dev": "vite --host 0.0.0.0 --port 5173",
+            "build": "vite build",
+            "preview": "vite preview"
+          },
+          dependencies: {
+            "react": "^18.3.1",
+            "react-dom": "^18.3.1",
+            "lucide-react": "^0.460.0"
+          },
+          devDependencies: {
+            "@types/react": "^18.3.1",
+            "@types/react-dom": "^18.3.1",
+            "@vitejs/plugin-react": "^4.3.3",
+            "autoprefixer": "^10.4.20",
+            "postcss": "^8.4.47",
+            "tailwindcss": "^3.4.14",
+            "vite": "^5.4.10"
+          }
+        };
+        await sandbox.files.write('/home/user/app/package.json', JSON.stringify(packageJson, null, 2));
+
+        const viteConfig = `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
+    cors: true,
+    allowedHosts: true
+  }
+})`;
+        await sandbox.files.write('/home/user/app/vite.config.js', viteConfig);
+
+        const indexHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lovable Application</title>
+  </head>
+  <body class="bg-slate-900 text-white min-h-screen">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>`;
+        await sandbox.files.write('/home/user/app/index.html', indexHtml);
+
+        const mainJsx = `import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)`;
+        await sandbox.files.write('/home/user/app/src/main.jsx', mainJsx);
+
+        const appJsx = `import React from 'react'
+
+export default function App() {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 font-sans">
+      <div className="max-w-md text-center">
+        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400 mb-3">
+          Sandbox Ready
+        </h1>
+        <p className="text-slate-400 text-sm">
+          Your React application sandbox is active and running. The AI agent will update this app based on your prompts!
+        </p>
+      </div>
+    </div>
+  )
+}`;
+        await sandbox.files.write('/home/user/app/src/App.jsx', appJsx);
+
+        const indexCss = `@tailwind base;
+@tailwind components;
+@tailwind utilities;`;
+        await sandbox.files.write('/home/user/app/src/index.css', indexCss);
+
+        const tailwindConfig = `/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}`;
+        await sandbox.files.write('/home/user/app/tailwind.config.js', tailwindConfig);
+
+        const postcssConfig = `export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}`;
+        await sandbox.files.write('/home/user/app/postcss.config.js', postcssConfig);
+      }
+    } catch (err: any) {
+      console.warn("Template verification warning:", err.message);
+    }
 
     // Install dependencies if node_modules is missing
     try {
@@ -149,7 +271,9 @@ export async function execCommandInPod(sandboxId: string, command: string | stri
     ? command
     : command.map(c => `"${c.replace(/"/g, '\\"')}"`).join(' ');
 
-  const targetDir = cwd || '/home/user/app';
+  const targetDir = (!cwd || cwd === '.' || cwd === './') 
+    ? '/home/user/app' 
+    : resolveAppPath(cwd);
   
   try {
     const result = await sandbox.commands.run(cmdString, { cwd: targetDir });
@@ -169,12 +293,23 @@ export async function execCommandInPod(sandboxId: string, command: string | stri
 }
 
 /**
+ * Helper to guarantee all file paths target /home/user/app
+ */
+function resolveAppPath(filePath: string): string {
+  if (filePath.startsWith('/home/user/app')) {
+    return filePath;
+  }
+  const cleanPath = filePath.replace(/^(\.\/|\/)/, '');
+  return `/home/user/app/${cleanPath}`;
+}
+
+/**
  * Reads a file from the Sandbox
  */
 export async function readFileFromPod(sandboxId: string, filePath: string): Promise<string> {
   const sandbox = await getOrConnectSandbox(sandboxId);
-
-  return await sandbox.files.read(filePath);
+  const targetPath = resolveAppPath(filePath);
+  return await sandbox.files.read(targetPath);
 }
 
 /**
@@ -182,8 +317,14 @@ export async function readFileFromPod(sandboxId: string, filePath: string): Prom
  */
 export async function writeFileToPod(sandboxId: string, filePath: string, content: string): Promise<void> {
   const sandbox = await getOrConnectSandbox(sandboxId);
+  const targetPath = resolveAppPath(filePath);
 
-  await sandbox.files.write(filePath, content);
+  // If writing App.tsx, clean up old template App.jsx to prevent Vite resolution ambiguity
+  if (targetPath.endsWith('/src/App.tsx')) {
+    await sandbox.commands.run('rm -f /home/user/app/src/App.jsx').catch(() => {});
+  }
+
+  await sandbox.files.write(targetPath, content);
 }
 
 /**

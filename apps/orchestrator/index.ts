@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { agentLoop } from "./agent/loop";
 import { prisma } from "@repo/db";
-import { createSandboxPod, forwardPodPort } from "./agent/e2b";
+import { createSandboxPod, forwardPodPort, deleteSandboxPod } from "./agent/e2b";
 
 // Load environment variables
 const PORT = process.env.PORT || 3001;
@@ -13,6 +13,34 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Delete a session and kill its sandbox
+app.delete("/api/sessions/:id", async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (session.sandboxId) {
+      deleteSandboxPod(session.sandboxId).catch(err => {
+        console.warn(`Error terminating sandbox for session ${sessionId}:`, err);
+      });
+    }
+
+    await prisma.session.delete({
+      where: { id: sessionId }
+    });
+
+    return res.json({ success: true, message: "Session and sandbox deleted successfully" });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // Initialize new session and start agent
 app.post("/api/session", async (req, res) => {

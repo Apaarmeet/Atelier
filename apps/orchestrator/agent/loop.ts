@@ -14,6 +14,29 @@ const openai = new OpenAI({
 
 import { prisma } from "@repo/db";
 
+import fs from "fs";
+import path from "path";
+
+// Read system prompt from soul.md
+let systemPrompt = "";
+const possibleSoulPaths = [
+  path.resolve(process.cwd(), "agent/soul.md"),
+  path.resolve(process.cwd(), "apps/orchestrator/agent/soul.md"),
+  path.join(process.cwd(), "soul.md"),
+];
+
+for (const p of possibleSoulPaths) {
+  if (fs.existsSync(p)) {
+    try {
+      systemPrompt = fs.readFileSync(p, "utf-8");
+      console.log(`✅ System prompt loaded from: ${p}`);
+      break;
+    } catch (e) {
+      // Continue to next path
+    }
+  }
+}
+
 /**
  * Runs the agent loop programmatically for a session.
  */
@@ -27,13 +50,7 @@ export async function agentLoop(sessionId: string, podName: string) {
   const messages: ChatCompletionMessageParam[] = [
     {
       role: "system",
-      content: `You are an expert full-stack coding assistant equipped with tools to read files, write files, edit files, and execute bash commands to build React applications.
-Your working directory for the user's React project is: /home/user/app. Always use this directory as the base path when manipulating files or running commands.
-
-CRITICAL WORKFLOW RULES FOR LIVE PREVIEW STABILITY:
-1. Valid Syntax: Always output complete, syntactically valid React/JSX code with proper imports and exports. Partial or broken edits will crash the preview server.
-2. Install Packages First: If your solution imports a new npm library (e.g., framer-motion, canvas-confetti, axios), run 'npm install <package-name>' via the bash tool BEFORE writing code that imports it.
-3. Preserve Configuration: Do NOT edit or overwrite /home/user/app/vite.config.js unless explicitly asked, and always preserve 'allowedHosts: true'.`,
+      content: systemPrompt || `You are Forge, an AI software engineer that builds and modifies web applications in an E2B sandbox. Working directory: /home/user/app.`,
     },
   ];
 
