@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ORCHESTRATOR_URL } from "@/lib/config";
 
 export default function ChatDashboardPage() {
   const { sessionId } = useParams();
@@ -26,7 +27,7 @@ export default function ChatDashboardPage() {
       setPodName(storedPod);
     } else {
       // Fetch it from the backend for existing sessions
-      fetch(`http://localhost:3001/api/sessions/${sessionId}/preview`)
+      fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/preview`)
         .then(res => res.json())
         .then(data => {
           if (data.previewUrl) {
@@ -44,7 +45,7 @@ export default function ChatDashboardPage() {
 
   const fetchMessages = async () => {
     try {
-      const res = await fetch(`http://localhost:3001/api/sessions/${sessionId}/messages`);
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/messages`);
       const data = await res.json();
       setMessages(data.messages || []);
       // Scroll to bottom
@@ -64,16 +65,16 @@ export default function ChatDashboardPage() {
     setMessages(prev => [...prev, { role: "user", content }]);
 
     try {
-      await fetch(`http://localhost:3001/api/session/${sessionId}/message`, {
+      await fetch(`${ORCHESTRATOR_URL}/api/session/${sessionId}/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, podName }),
       });
-      // The background task starts, polling will catch new messages
     } catch (err) {
       console.error("Error sending message", err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

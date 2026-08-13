@@ -23,6 +23,7 @@ export async function bashTool(args: { command: string; workdir?: string }, podN
       command,
       stdout: result.stdout.trim(),
       stderr: result.stderr.trim(),
+      exitCode: result.exitCode,
     });
   } catch (err: any) {
     return JSON.stringify({

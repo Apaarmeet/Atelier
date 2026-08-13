@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ORCHESTRATOR_URL } from "../../lib/config";
+import { ORCHESTRATOR_URL } from "@/lib/config";
 
 export default function NewDashboardPage() {
   const [prompt, setPrompt] = useState("");

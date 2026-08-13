@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ORCHESTRATOR_URL } from "../../lib/config";
+import { ORCHESTRATOR_URL } from "@/lib/config";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<any[]>([]);

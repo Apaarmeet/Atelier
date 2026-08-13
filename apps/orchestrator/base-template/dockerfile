@@ -1,19 +1,19 @@
-     FROM oven/bun:1
+FROM oven/bun:1
 
-    # Set the working directory inside the container
-    WORKDIR /app
+# Set the working directory inside the container to /home/user/app
+WORKDIR /home/user/app
 
-    # Copy the package files first (good Docker caching practice)
-    COPY package.json bun.lock* ./
+# Copy the package files first for layer caching
+COPY package.json bun.lock* ./
 
-    # INSTALL THE DEPENDENCIES FOR LINUX
-    RUN bun install
+# Install dependencies into node_modules
+RUN bun install
 
-    # Copy the rest of your empty React base template into the container
-    COPY . .
+# Copy template files
+COPY . .
 
-    # Expose port 5173 so the iframe can access the Vite dev server
-    EXPOSE 5173
+# Expose port 5173 for Vite dev server
+EXPOSE 5173
 
-    # Keep the container running infinitely so the Pod doesn't crash
-    CMD ["sleep", "infinity"]
+# Run Vite dev server in a persistent supervisor loop
+CMD ["sh", "-c", "while true; do bun run dev || sleep 1; done"]

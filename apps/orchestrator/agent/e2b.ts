@@ -74,56 +74,61 @@ export async function createSandboxPod(sessionId: string): Promise<string> {
     sandboxIdToE2bIdMap.set(sessionId, realE2bId);
     sandboxIdToE2bIdMap.set(realE2bId, realE2bId);
 
-    console.log(`E2B Sandbox created with real E2B ID [${realE2bId}] for session [${sessionId}]. Setting up React template...`);
+    console.log(`E2B Sandbox created with real E2B ID [${realE2bId}] for session [${sessionId}]. Setting up application...`);
     
-    // Set up the React application using Vite
-    await sandbox.commands.run('mkdir -p /home/user/app');
-    
-    // Ensure Bun is installed in container if missing
-    await sandbox.commands.run('command -v bun >/dev/null 2>&1 || (curl -fsSL https://bun.sh/install | bash)');
+    // Ensure working directory exists
+    await sandbox.commands.run('mkdir -p /home/user/app').catch(() => {});
 
-    // Create a new React app with Vite inside /home/user/app using Bun
-    await sandbox.commands.run('export PATH="$HOME/.bun/bin:$PATH" && bun create vite . --template react', { cwd: '/home/user/app' });
+    // Install dependencies if node_modules is missing
+    try {
+      console.log("Checking dependencies in sandbox...");
+      await sandbox.commands.run('test -d /home/user/app/node_modules || npm install', { cwd: '/home/user/app' });
+    } catch (err: any) {
+      console.warn("npm install warning:", err.message);
+    }
     
-    // Remove existing vite.config.ts if created by template to avoid duplicate config conflicts
-    await sandbox.commands.run('rm -f /home/user/app/vite.config.ts');
-    
-    await sandbox.commands.run('export PATH="$HOME/.bun/bin:$PATH" && bun install', { cwd: '/home/user/app' });
-    
-    // Update vite.config.js to allow host and lock port 5173
-    const viteConfig = `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '0.0.0.0',
-    port: 5173,
-    strictPort: true,
-    allowedHosts: true
-  }
-})`
-    await sandbox.files.write('/home/user/app/vite.config.js', viteConfig);
-    
-    // Start the dev server in the background using Bun
-    sandbox.commands.run('export PATH="$HOME/.bun/bin:$PATH" && bun run dev --host 0.0.0.0 --port 5173', { 
+    // Start Vite dev server with infinite auto-restart daemon in background
+    console.log("Starting persistent Vite dev server daemon in sandbox on port 5173...");
+    const daemonCmd = "nohup sh -c 'while true; do npx vite --host 0.0.0.0 --port 5173; sleep 1; done' > /home/user/vite.log 2>&1 &";
+    sandbox.commands.run(daemonCmd, { 
       cwd: '/home/user/app',
       background: true 
+    }).catch(err => {
+      console.warn("Dev server start warning:", err.message);
     });
 
     return realE2bId;
-  } catch (err) {
+  } catch (err: any) {
     console.error("Error creating E2B sandbox:", err);
-    throw err;
+    throw new Error(err.message || "Failed to initialize E2B sandbox pod");
   }
 }
 
 /**
  * Retrieves the preview URL for the sandbox's dev server (port 5173).
+ * Automatically verifies if Vite dev server daemon is active, restarting if necessary.
  */
 export async function forwardPodPort(sandboxId: string): Promise<{ url: string }> {
   const sandbox = await getOrConnectSandbox(sandboxId);
   
+  // Verify if Vite dev server daemon is running inside container; if not, launch supervisor loop!
+  try {
+    const pCheck = await sandbox.commands.run('pgrep -f vite || true', { cwd: '/home/user/app' });
+    if (!pCheck.stdout.trim()) {
+      console.log("Vite dev server daemon is inactive on port 5173. Auto-launching persistent supervisor...");
+      const daemonCmd = "nohup sh -c 'while true; do npx vite --host 0.0.0.0 --port 5173; sleep 1; done' > /home/user/vite.log 2>&1 &";
+      sandbox.commands.run(daemonCmd, {
+        cwd: '/home/user/app',
+        background: true
+      }).catch(err => console.warn("Dev server restart warning:", err.message));
+      
+      // Brief pause to allow port binding
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  } catch (err: any) {
+    console.warn("Dev server health check warning:", err.message);
+  }
+
   const rawHost = sandbox.getHost(5173);
   const previewUrl = rawHost.startsWith("http://") || rawHost.startsWith("https://")
     ? rawHost
@@ -135,9 +140,9 @@ export async function forwardPodPort(sandboxId: string): Promise<{ url: string }
 }
 
 /**
- * Executes a bash command inside the specified E2B Sandbox
+ * Executes a bash command inside the specified E2B Sandbox without throwing on non-zero exit code
  */
-export async function execCommandInPod(sandboxId: string, command: string | string[], cwd?: string): Promise<{ stdout: string, stderr: string }> {
+export async function execCommandInPod(sandboxId: string, command: string | string[], cwd?: string): Promise<{ stdout: string, stderr: string, exitCode: number }> {
   const sandbox = await getOrConnectSandbox(sandboxId);
 
   const cmdString = typeof command === "string"
@@ -145,13 +150,22 @@ export async function execCommandInPod(sandboxId: string, command: string | stri
     : command.map(c => `"${c.replace(/"/g, '\\"')}"`).join(' ');
 
   const targetDir = cwd || '/home/user/app';
-  const result = await sandbox.commands.run(cmdString, { cwd: targetDir });
   
-  if (result.exitCode !== 0) {
-    throw new Error(`Command failed (exit code ${result.exitCode}): ${result.stderr || result.stdout}`);
+  try {
+    const result = await sandbox.commands.run(cmdString, { cwd: targetDir });
+    return { 
+      stdout: result.stdout || "", 
+      stderr: result.stderr || "", 
+      exitCode: result.exitCode ?? 0 
+    };
+  } catch (err: any) {
+    // E2B SDK throws an Error ("exit status 1") when exitCode != 0
+    return {
+      stdout: err.stdout || "",
+      stderr: err.stderr || err.message || "",
+      exitCode: err.exitCode || 1,
+    };
   }
-  
-  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
