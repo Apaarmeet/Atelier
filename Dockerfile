@@ -20,5 +20,5 @@ RUN bun run postinstall
 # Expose the port the orchestrator runs on
 EXPOSE 3001
 
-# Start the orchestrator
-CMD ["bun", "run", "--cwd", "apps/orchestrator", "start"]
+# Start the orchestrator directly with bun
+CMD ["bun", "run", "apps/orchestrator/index.ts"]
