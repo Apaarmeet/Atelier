@@ -6,6 +6,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ORCHESTRATOR_URL } from "@/lib/config";
 
+const QUICK_ITERATIONS = [
+  "Add dark mode support",
+  "Make responsive on mobile",
+  "Add realistic mock data",
+  "Add interactive animations"
+];
+
 export default function ChatDashboardPage() {
   const { sessionId } = useParams();
   const [messages, setMessages] = useState<any[]>([]);
@@ -13,6 +20,7 @@ export default function ChatDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [podName, setPodName] = useState<string>("");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   
   // Resizable split pane state
   const [chatWidth, setChatWidth] = useState<number>(440);
@@ -41,8 +49,8 @@ export default function ChatDashboardPage() {
     if (!isDragging || !containerRef.current) return;
     const containerRect = containerRef.current.getBoundingClientRect();
     const newWidth = e.clientX - containerRect.left;
-    const minWidth = 300;
-    const maxWidth = Math.min(containerRect.width - 320, 850);
+    const minWidth = 320;
+    const maxWidth = Math.min(containerRect.width - 340, 900);
     
     if (newWidth >= minWidth && newWidth <= maxWidth) {
       setChatWidth(newWidth);
@@ -73,7 +81,7 @@ export default function ChatDashboardPage() {
     const storedPod = sessionStorage.getItem(`podName-${sessionId}`);
     
     if (storedUrl && storedPod) {
-      setTimeout(() => setPreviewUrl(storedUrl), 3000);
+      setTimeout(() => setPreviewUrl(storedUrl), 2000);
       setPodName(storedPod);
     } else {
       fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/preview`)
@@ -100,7 +108,6 @@ export default function ChatDashboardPage() {
       const newMsgs = data.messages || [];
 
       setMessages(prev => {
-        // Only auto-scroll to bottom if user is already near bottom or messages updated
         if (isAtBottomRef.current) {
           setTimeout(() => {
             messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -109,17 +116,17 @@ export default function ChatDashboardPage() {
         return newMsgs;
       });
     } catch (err) {
-      // Silently catch transient network polling errors
+      // transient network poll
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!prompt.trim() || !podName) return;
+  const handleSendMessage = async (textToSend?: string) => {
+    const messageContent = textToSend || prompt;
+    if (!messageContent.trim() || !podName) return;
     setLoading(true);
-    const content = prompt;
     setPrompt("");
     
-    setMessages(prev => [...prev, { role: "user", content }]);
+    setMessages(prev => [...prev, { role: "user", content: messageContent }]);
     isAtBottomRef.current = true;
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -129,7 +136,7 @@ export default function ChatDashboardPage() {
       await fetch(`${ORCHESTRATOR_URL}/api/session/${sessionId}/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, podName }),
+        body: JSON.stringify({ content: messageContent, podName }),
       });
     } catch (err) {
       console.error("Error sending message", err);
@@ -146,23 +153,32 @@ export default function ChatDashboardPage() {
     }
   };
 
+  const copyToolContent = (text: string, idx: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(idx);
+    setTimeout(() => setCopiedIndex(null), 1500);
+  };
+
   return (
-    <div ref={containerRef} className="flex h-full w-full relative select-none bg-neutral-950 text-white font-sans">
-      {/* Invisible overlay while dragging to prevent iframe from intercepting mouse movements */}
+    <div ref={containerRef} className="flex h-full w-full relative select-none bg-[#090a0e] light:bg-[#fbfbfa] text-slate-100 light:text-slate-900 font-sans transition-colors duration-200">
+      {/* Drag overlay */}
       {isDragging && <div className="fixed inset-0 z-50 cursor-col-resize select-none" />}
 
-      {/* Chat Pane (Left / Middle) */}
+      {/* Left Chat Pane */}
       <div 
         style={{ width: `${chatWidth}px` }} 
-        className="flex flex-col bg-neutral-950 border-r border-white/5 h-full relative z-10 shadow-[10px_0_30px_rgba(0,0,0,0.8)] flex-shrink-0"
+        className="flex flex-col bg-[#0c0d12] light:bg-[#ffffff] border-r border-white/[0.08] light:border-black/[0.07] h-full relative z-10 flex-shrink-0"
       >
-        {/* Workspace Header */}
-        <div className="p-4 border-b border-white/5 bg-neutral-900/60 backdrop-blur-md flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-            <h2 className="font-bold text-sm tracking-tight text-white">Agent Workspace</h2>
+        {/* Workspace Toolbar Header */}
+        <div className="h-14 px-4 border-b border-white/[0.08] light:border-black/[0.07] bg-[#0f1117]/80 light:bg-slate-50/80 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 light:bg-emerald-600 animate-pulse" />
+            <span className="font-semibold text-xs text-white light:text-slate-900">Atelier Agent</span>
+            <span className="text-[10px] font-mono text-slate-400 light:text-slate-500 px-1.5 py-0.5 rounded bg-white/[0.05] light:bg-black/[0.05] border border-white/[0.06] light:border-black/[0.06]">
+              Live Loop
+            </span>
           </div>
-          <span className="text-[10px] text-neutral-400 font-mono px-2 py-0.5 rounded-full bg-neutral-900 border border-white/5">
+          <span className="text-[11px] text-slate-400 light:text-slate-500 font-mono">
             {chatWidth}px
           </span>
         </div>
@@ -171,7 +187,7 @@ export default function ChatDashboardPage() {
         <div 
           ref={chatScrollRef} 
           onScroll={handleChatScroll}
-          className="flex-1 overflow-y-auto p-4 space-y-4 pb-28"
+          className="flex-1 overflow-y-auto p-4 space-y-3.5 pb-36 text-xs"
         >
           {messages.map((msg, idx) => {
             if (msg.role === "tool") return null;
@@ -181,42 +197,84 @@ export default function ChatDashboardPage() {
             
             return (
               <div key={msg.id || idx} className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
+                
+                {/* Role Eyebrow */}
+                <div className="text-[10px] font-mono text-slate-400 light:text-slate-500 uppercase tracking-wider mb-1 px-1">
+                  {isUser ? "Engineer" : "Atelier Synthesizer"}
+                </div>
+
                 {msg.content && (
-                  <div className={`max-w-[88%] p-3.5 text-xs md:text-sm leading-relaxed ${
+                  <div className={`max-w-[92%] p-3.5 text-xs leading-relaxed rounded-xl shadow-sm ${
                     isUser 
-                    ? "bg-gradient-to-r from-rose-500 via-purple-500 to-blue-500 text-white rounded-2xl rounded-br-none shadow-lg shadow-rose-500/15" 
-                    : "bg-neutral-900/90 text-neutral-200 border border-white/10 rounded-2xl rounded-bl-none shadow-md backdrop-blur-md prose prose-invert prose-sm max-w-none"
+                    ? "bg-blue-600 light:bg-blue-700 text-white font-medium shadow-blue-600/10" 
+                    : "bg-[#161922] light:bg-white text-slate-200 light:text-slate-800 border border-white/[0.08] light:border-black/[0.07]"
                   }`}>
                     {isUser ? (
-                      <p className="whitespace-pre-wrap font-medium">{msg.content}</p>
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
                     ) : (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
+                      <div className="prose prose-invert light:prose-slate prose-xs max-w-none prose-p:leading-relaxed prose-pre:bg-[#090a0e] prose-pre:border prose-pre:border-white/[0.08]">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
                     )}
                   </div>
                 )}
                 
-                {/* Agent Action Log Cards */}
-                {!isUser && toolCalls && Array.isArray(toolCalls) && toolCalls.map((tc: any, i: number) => (
-                  <div key={i} className="mt-2 w-full max-w-[88%] bg-neutral-950 border border-emerald-500/20 rounded-xl p-3 font-mono text-[11px] text-emerald-400 shadow-inner">
-                    <div className="flex items-center gap-2 mb-1 opacity-80">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      <span className="font-semibold text-[10px] uppercase tracking-wider text-emerald-300">Tool Execution</span>
+                {/* Agent Tool Execution Badges */}
+                {!isUser && toolCalls && Array.isArray(toolCalls) && toolCalls.map((tc: any, i: number) => {
+                  const fnName = tc.function?.name || "tool";
+                  const args = tc.function?.arguments || "";
+                  const toolKey = idx * 100 + i;
+                  
+                  return (
+                    <div key={i} className="mt-2 w-full max-w-[92%] bg-[#090a0e] light:bg-slate-900 border border-white/[0.08] rounded-lg p-2.5 font-mono text-[11px] text-slate-300 shadow-inner">
+                      <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/[0.06]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          <span className="font-semibold text-[10px] uppercase text-amber-400">Tool: {fnName}</span>
+                        </div>
+                        <button
+                          onClick={() => copyToolContent(args, toolKey)}
+                          className="text-[9px] text-slate-400 hover:text-white transition-colors"
+                        >
+                          {copiedIndex === toolKey ? "✓ Copied" : "Copy"}
+                        </button>
+                      </div>
+                      <div className="text-slate-400 overflow-x-auto whitespace-pre-wrap break-all text-[10px] max-h-24 overflow-y-auto font-mono">
+                        {args}
+                      </div>
                     </div>
-                    <div className="text-neutral-300 overflow-x-auto whitespace-nowrap">
-                      $ {tc.function?.name}( {tc.function?.arguments?.length > 45 ? tc.function?.arguments?.substring(0, 45) + "..." : tc.function?.arguments} )
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             );
           })}
 
+          {/* Quick Iteration Suggestion Chips */}
+          {messages.length > 0 && !loading && (
+            <div className="pt-2">
+              <div className="text-[10px] font-mono text-slate-400 light:text-slate-500 uppercase tracking-wider mb-2">
+                Quick Iterations
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_ITERATIONS.map((suggestion, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleSendMessage(suggestion)}
+                    className="px-2.5 py-1 rounded-md text-[11px] bg-[#161922] light:bg-white hover:bg-[#1e222e] light:hover:bg-slate-100 text-slate-300 light:text-slate-700 border border-white/[0.06] light:border-black/[0.07] shadow-sm transition-colors"
+                  >
+                    + {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {loading && (
-            <div className="flex items-center gap-2 text-xs text-neutral-400 p-2.5 bg-neutral-900/40 rounded-2xl border border-white/5 w-fit">
-              <div className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-              <span>Forge AI is analyzing code & writing files...</span>
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-400 light:text-slate-600 p-2.5 bg-[#161922] light:bg-white rounded-lg border border-white/[0.08] light:border-black/[0.07] w-fit shadow-sm">
+              <div className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+              <span>Agent inspecting files & compiling code...</span>
             </div>
           )}
 
@@ -224,10 +282,10 @@ export default function ChatDashboardPage() {
         </div>
 
         {/* Message Input Box */}
-        <div className="absolute bottom-0 w-full p-4 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent pt-8">
-          <div className="relative bg-neutral-900/90 border border-white/10 rounded-2xl overflow-hidden shadow-2xl focus-within:border-rose-500/60 focus-within:ring-2 focus-within:ring-rose-500/20 transition-all">
+        <div className="absolute bottom-0 w-full p-3 bg-gradient-to-t from-[#0c0d12] via-[#0c0d12]/90 to-transparent light:from-white light:via-white/90">
+          <div className="relative bg-[#161922] light:bg-slate-50 border border-white/[0.08] light:border-black/[0.08] rounded-xl overflow-hidden shadow-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
             <textarea
-              placeholder="Ask for changes or new features..."
+              placeholder="Direct the synthesizer (e.g. Add dark theme switcher, add charts...)"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
@@ -236,15 +294,16 @@ export default function ChatDashboardPage() {
                   handleSendMessage();
                 }
               }}
-              className="w-full bg-transparent text-white p-3.5 pr-12 resize-none focus:outline-none max-h-32 text-xs md:text-sm placeholder-neutral-500"
+              className="w-full bg-transparent text-white light:text-slate-900 p-3 pr-10 resize-none focus:outline-none max-h-28 text-xs placeholder-slate-500 light:placeholder-slate-400"
               rows={2}
             />
             <button 
-              onClick={handleSendMessage}
+              onClick={() => handleSendMessage()}
               disabled={loading || !prompt.trim()}
-              className="absolute right-2.5 bottom-2.5 p-2 bg-gradient-to-r from-rose-500 via-purple-500 to-blue-500 text-white rounded-xl hover:scale-105 active:scale-95 disabled:opacity-40 transition-all shadow-md"
+              className="absolute right-2 bottom-2 p-1.5 bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white rounded-lg disabled:opacity-40 transition-colors shadow-sm"
+              title="Send instructions (Enter)"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="22" y1="2" x2="11" y2="13" />
                 <polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
@@ -253,56 +312,58 @@ export default function ChatDashboardPage() {
         </div>
       </div>
 
-      {/* Draggable Split Handle Bar */}
+      {/* Draggable Divider Handle */}
       <div 
         onMouseDown={handleMouseDown}
-        className={`w-2 hover:w-2.5 bg-neutral-900 hover:bg-rose-500 cursor-col-resize flex-shrink-0 transition-all group z-30 flex items-center justify-center border-r border-white/5 ${
-          isDragging ? "bg-rose-500" : ""
+        className={`w-1.5 hover:w-2 bg-[#090a0e] light:bg-slate-200 hover:bg-blue-600 light:hover:bg-blue-600 cursor-col-resize flex-shrink-0 transition-all group z-30 flex items-center justify-center border-r border-white/[0.08] light:border-black/[0.07] ${
+          isDragging ? "bg-blue-600" : ""
         }`}
-        title="Drag to resize pane width"
+        title="Drag to resize split pane"
       >
-        <div className={`w-0.5 h-12 rounded-full transition-colors ${isDragging ? "bg-white" : "bg-neutral-600 group-hover:bg-white"}`} />
+        <div className={`w-0.5 h-8 rounded-full transition-colors ${isDragging ? "bg-white" : "bg-slate-600 light:bg-slate-400 group-hover:bg-white"}`} />
       </div>
 
-      {/* Preview Pane (Right) */}
-      <div className="flex-1 bg-neutral-950 flex flex-col overflow-hidden relative">
-        {/* Preview Control Bar */}
-        <div className="p-3 bg-neutral-900/80 border-b border-white/5 flex items-center justify-between z-10 backdrop-blur-md">
+      {/* Right Live Preview Pane */}
+      <div className="flex-1 bg-[#090a0e] light:bg-[#fbfbfa] flex flex-col overflow-hidden relative">
+        {/* Preview Control Toolbar */}
+        <div className="h-14 px-4 bg-[#0c0d12] light:bg-[#ffffff] border-b border-white/[0.08] light:border-black/[0.07] flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Sandbox Connected</span>
+            {/* Status Beacon */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 light:text-emerald-700 text-xs font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 light:bg-emerald-600 animate-pulse" />
+              <span>Sandbox Live</span>
             </div>
 
-            <div className="h-4 w-px bg-white/10 hidden sm:block" />
+            <div className="h-4 w-px bg-white/[0.08] light:border-black/[0.07] hidden sm:block" />
 
-            <div className="flex items-center gap-1 bg-neutral-950/80 p-0.5 rounded-full border border-white/5 text-xs">
+            {/* Device Switcher */}
+            <div className="flex items-center gap-1 bg-[#161922] light:bg-slate-100 p-0.5 rounded-lg border border-white/[0.06] light:border-black/[0.06] text-xs font-medium">
               <button
                 onClick={() => setDeviceMode("responsive")}
-                className={`px-3 py-1 rounded-full transition-all text-xs font-semibold ${
+                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
                   deviceMode === "responsive" 
-                  ? "bg-white text-neutral-950 shadow-sm" 
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
+                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
                 }`}
               >
                 Responsive
               </button>
               <button
                 onClick={() => setDeviceMode("tablet")}
-                className={`px-3 py-1 rounded-full transition-all text-xs font-semibold ${
+                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
                   deviceMode === "tablet" 
-                  ? "bg-white text-neutral-950 shadow-sm" 
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
+                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
                 }`}
               >
                 Tablet (768px)
               </button>
               <button
                 onClick={() => setDeviceMode("mobile")}
-                className={`px-3 py-1 rounded-full transition-all text-xs font-semibold ${
+                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
                   deviceMode === "mobile" 
-                  ? "bg-white text-neutral-950 shadow-sm" 
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
+                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
                 }`}
               >
                 Mobile (375px)
@@ -313,10 +374,10 @@ export default function ChatDashboardPage() {
           <div className="flex items-center gap-1.5">
             <button
               onClick={refreshPreview}
-              className="p-1.5 text-neutral-400 hover:text-white hover:bg-white/10 rounded-xl transition-all"
-              title="Refresh Preview"
+              className="p-1.5 text-slate-400 hover:text-white light:hover:text-slate-900 hover:bg-white/[0.06] light:hover:bg-black/[0.05] rounded-md transition-colors"
+              title="Refresh live preview"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 0.57-8.38l5.67-5.67" />
               </svg>
             </button>
@@ -326,11 +387,11 @@ export default function ChatDashboardPage() {
                 href={previewUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-rose-500 via-purple-500 to-blue-500 text-white text-xs font-semibold rounded-full shadow-md hover:shadow-rose-500/25 hover:scale-105 active:scale-95 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white text-xs font-medium rounded-lg transition-colors shadow-sm"
                 title="Open Preview in New Tab"
               >
                 <span>Pop Out</span>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
                   <polyline points="15 3 21 3 21 9" />
                   <line x1="10" y1="14" x2="21" y2="3" />
@@ -340,27 +401,40 @@ export default function ChatDashboardPage() {
           </div>
         </div>
 
-        {/* Viewport Frame */}
-        <div className="flex-1 flex items-center justify-center p-4 bg-neutral-950 overflow-auto">
+        {/* Viewport Frame with Simulated Browser Chrome */}
+        <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-[#090a0e] light:bg-[#fbfbfa] overflow-auto">
           {previewUrl ? (
-            <div className={`h-full transition-all duration-300 shadow-[0_20px_50px_rgba(0,0,0,0.9)] rounded-2xl overflow-hidden border border-white/10 ${
+            <div className={`h-full flex flex-col transition-all duration-200 rounded-xl overflow-hidden border border-white/[0.08] light:border-black/[0.08] bg-white shadow-2xl ${
               deviceMode === "mobile"
-              ? "w-[375px] h-[667px] max-h-full"
+              ? "w-[375px] h-[667px] max-h-full ring-1 ring-white/10"
               : deviceMode === "tablet"
-              ? "w-[768px] max-h-full"
+              ? "w-[768px] max-h-full ring-1 ring-white/10"
               : "w-full"
             }`}>
+              {/* Simulated Browser URL Bar */}
+              <div className="h-8 bg-[#11141a] light:bg-slate-100 border-b border-white/[0.08] light:border-black/[0.07] px-3 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="text-emerald-400">🔒</span>
+                  <span className="text-slate-300 light:text-slate-700 truncate">localhost:5173</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500">
+                    {deviceMode === "mobile" ? "375 × 667" : deviceMode === "tablet" ? "768 × 1024" : "100%"}
+                  </span>
+                </div>
+              </div>
+
               <iframe 
                 src={previewUrl}
-                className="w-full h-full border-none bg-white"
-                title="Live Preview"
+                className="w-full flex-1 border-none bg-white"
+                title="Live Application Preview"
               />
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-neutral-400">
-              <div className="w-12 h-12 border-3 border-rose-500/30 border-t-rose-500 rounded-full animate-spin mb-4" />
-              <p className="font-semibold text-neutral-200 text-base">Initializing E2B Sandbox MicroVM...</p>
-              <p className="text-xs mt-1 text-neutral-500">Starting Vite dev server on port 5173...</p>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 light:text-slate-600 p-6 text-center">
+              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
+              <p className="font-medium text-white light:text-slate-900 text-sm">Initializing E2B MicroVM Sandbox...</p>
+              <p className="text-xs mt-1 text-slate-400 light:text-slate-500 font-mono">Starting Vite dev server on port 5173...</p>
             </div>
           )}
         </div>

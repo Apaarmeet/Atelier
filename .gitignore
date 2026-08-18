@@ -37,3 +37,7 @@ yarn-error.log*
 .DS_Store
 *.pem
 workspaces
+.agents
+.commandcode
+.impeccable
+.codex
