@@ -6,6 +6,7 @@ WORKDIR /app
 COPY bun.lock package.json ./
 COPY apps/orchestrator/package.json ./apps/orchestrator/
 COPY packages/db/package.json ./packages/db/
+COPY packages/db/prisma ./packages/db/prisma/
 
 # Install dependencies
 RUN bun install
