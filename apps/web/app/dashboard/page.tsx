@@ -50,6 +50,7 @@ export default function NewDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [isStaged, setIsStaged] = useState(false);
   const router = useRouter();
 
   const handleStartSession = async (customPrompt?: string) => {
@@ -88,6 +89,17 @@ export default function NewDashboardPage() {
     }
   };
 
+  const handleStageTemplate = (templatePrompt: string) => {
+    setPrompt(templatePrompt);
+    setIsStaged(true);
+    setTimeout(() => setIsStaged(false), 2000);
+    const textarea = document.getElementById("prompt-studio-textarea");
+    if (textarea) {
+      textarea.focus();
+      textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
   const addModifier = (modifier: string) => {
     setPrompt(prev => {
       const trimmed = prev.trim();
@@ -95,6 +107,8 @@ export default function NewDashboardPage() {
       if (trimmed.includes(modifier.replace("+ ", ""))) return trimmed;
       return `${trimmed} with ${modifier.replace("+ ", "").toLowerCase()}`;
     });
+    const textarea = document.getElementById("prompt-studio-textarea");
+    if (textarea) textarea.focus();
   };
 
   const filteredSuggestions = useMemo(() => {
@@ -103,7 +117,7 @@ export default function NewDashboardPage() {
   }, [selectedCategory]);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 md:p-12 bg-[#090a0e] light:bg-[#fbfbfa] text-slate-100 light:text-slate-900 relative overflow-y-auto selection:bg-blue-600 selection:text-white bg-grid-pattern transition-colors duration-200">
+    <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 md:p-12 bg-[#090a0e] light:bg-[#fbfbfa] text-slate-100 light:text-slate-900 relative overflow-y-auto selection:bg-blue-600 selection:text-white transition-colors duration-200">
       <div className="max-w-3xl w-full flex flex-col items-center relative z-10 py-6">
         
         {/* Header Badge */}
@@ -133,16 +147,22 @@ export default function NewDashboardPage() {
         )}
 
         {/* Prompt Studio Console */}
-        <div className="w-full bg-[#0f1117] light:bg-white border border-white/[0.09] light:border-black/[0.08] rounded-xl p-4 sm:p-5 shadow-xl shadow-black/40 light:shadow-slate-200/60">
+        <div className={`w-full bg-[#0f1117] light:bg-white border ${
+          isStaged ? "border-blue-500 ring-2 ring-blue-500/20" : "border-white/[0.09] light:border-black/[0.08]"
+        } rounded-xl p-4 sm:p-5 shadow-xl shadow-black/40 light:shadow-slate-200/60 transition-all duration-300`}>
           <div className="relative">
             <textarea 
+              id="prompt-studio-textarea"
               placeholder="E.g. Build a modern customer support portal with real-time ticket triage, status filters, priority indicators, and responsive drawer..."
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   handleStartSession();
+                }
+                if (e.key === 'Escape') {
+                  setPrompt("");
                 }
               }}
               className="w-full h-32 bg-transparent text-white light:text-slate-900 focus:outline-none resize-none placeholder-slate-500 light:placeholder-slate-400 text-sm leading-relaxed"
@@ -153,7 +173,7 @@ export default function NewDashboardPage() {
               <button
                 onClick={() => setPrompt("")}
                 className="absolute right-0 top-0 text-[10px] font-mono text-slate-400 hover:text-slate-200 light:hover:text-slate-700"
-                title="Clear input"
+                title="Clear input (Esc)"
               >
                 Clear
               </button>
@@ -168,7 +188,7 @@ export default function NewDashboardPage() {
                 key={i}
                 type="button"
                 onClick={() => addModifier(mod)}
-                className="px-2.5 py-1 rounded text-[10px] font-mono bg-[#161922] light:bg-slate-100 hover:bg-[#1e222e] light:hover:bg-slate-200 text-slate-300 light:text-slate-700 border border-white/[0.06] light:border-black/[0.06] transition-colors"
+                className="px-2.5 py-1 rounded text-[10px] font-mono bg-[#161922] light:bg-slate-100 hover:bg-[#1e222e] light:hover:bg-slate-200 text-slate-300 light:text-slate-700 border border-white/[0.06] light:border-black/[0.06] transition-colors cursor-pointer"
               >
                 {mod}
               </button>
@@ -190,7 +210,7 @@ export default function NewDashboardPage() {
               className={`w-full sm:w-auto px-5 py-2 rounded-lg font-medium text-xs transition-colors flex items-center justify-center gap-2 ${
                 loading || !prompt.trim() 
                 ? "bg-[#181b26] light:bg-slate-100 text-slate-500 light:text-slate-400 cursor-not-allowed border border-white/[0.06] light:border-black/[0.06]" 
-                : "bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white shadow-sm"
+                : "bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white shadow-sm cursor-pointer"
               }`}
             >
               {loading ? (
@@ -212,7 +232,7 @@ export default function NewDashboardPage() {
         <div className="mt-8 w-full">
           <div className="flex items-center justify-between mb-3">
             <div className="text-left text-[11px] font-mono uppercase tracking-wider text-slate-400 light:text-slate-500">
-              Starter Templates
+              Starter Templates (Click to Edit)
             </div>
             
             {/* Category Filter Pills */}
@@ -221,7 +241,7 @@ export default function NewDashboardPage() {
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`px-2.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                  className={`px-2.5 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
                     selectedCategory === cat
                     ? "bg-blue-600 light:bg-blue-700 text-white"
                     : "bg-[#12141c] light:bg-slate-100 text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900 border border-white/[0.06] light:border-black/[0.06]"
@@ -235,25 +255,35 @@ export default function NewDashboardPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {filteredSuggestions.map((item, idx) => (
-              <button
+              <div
                 key={idx}
-                onClick={() => {
-                  setPrompt(item.prompt);
-                  handleStartSession(item.prompt);
-                }}
-                disabled={loading}
-                className="p-3.5 bg-[#0f1117] light:bg-white hover:bg-[#161922] light:hover:bg-slate-50 border border-white/[0.08] light:border-black/[0.07] rounded-xl text-left transition-colors group flex flex-col justify-between shadow-sm"
+                onClick={() => handleStageTemplate(item.prompt)}
+                className="p-3.5 bg-[#0f1117] light:bg-white hover:bg-[#161922] light:hover:bg-slate-50 border border-white/[0.08] light:border-black/[0.07] rounded-xl text-left transition-colors group flex flex-col justify-between shadow-sm cursor-pointer relative"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-mono text-blue-400 light:text-blue-600 uppercase">{item.category}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-500 group-hover:text-blue-400 light:group-hover:text-blue-600 transition-colors">
-                    <path d="M5 12h14" />
-                    <path d="M12 5l7 7-7 7" />
-                  </svg>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStartSession(item.prompt);
+                      }}
+                      disabled={loading}
+                      title="Instant Launch"
+                      className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 text-[9px] font-mono bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white rounded border border-blue-500/30 transition-all"
+                    >
+                      ⚡ Run
+                    </button>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-500 group-hover:text-blue-400 light:group-hover:text-blue-600 transition-colors">
+                      <path d="M5 12h14" />
+                      <path d="M12 5l7 7-7 7" />
+                    </svg>
+                  </div>
                 </div>
                 <div className="text-xs font-medium text-white light:text-slate-900 mt-1">{item.title}</div>
                 <div className="text-[11px] text-slate-400 light:text-slate-500 mt-1 line-clamp-1">{item.prompt}</div>
-              </button>
+              </div>
             ))}
           </div>
         </div>

@@ -11,10 +11,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [user, setUser] = useState<any>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sessionToDelete, setSessionToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
 
+  // Global Keyboard Shortcuts (Cmd+N for New Project, Cmd+K for Search)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        router.push("/dashboard");
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const searchInput = document.getElementById("workspace-search-input");
+        if (searchInput) {
+          searchInput.focus();
+        } else {
+          router.push("/dashboard");
+        }
+      }
+      if (e.key === "Escape" && sessionToDelete) {
+        setSessionToDelete(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [router, sessionToDelete]);
 
   useEffect(() => {
     const storedUser = localStorage.getItem("user");
@@ -38,23 +64,34 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push("/");
   };
 
-  const handleDeleteSession = async (e: React.MouseEvent, sessionId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    setSessions(prev => prev.filter(s => s.id !== sessionId));
+  const confirmDeleteSession = async () => {
+    if (!sessionToDelete) return;
+    const { id } = sessionToDelete;
+    setIsDeleting(true);
 
     try {
-      await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}`, {
+      await fetch(`${ORCHESTRATOR_URL}/api/sessions/${id}`, {
         method: "DELETE",
       });
 
-      if (window.location.pathname.includes(sessionId)) {
+      setSessions(prev => prev.filter(s => s.id !== id));
+      setSessionToDelete(null);
+
+      if (window.location.pathname.includes(id)) {
         router.push("/dashboard");
       }
     } catch (err) {
       console.error("Error deleting session:", err);
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const promptDeleteSession = (e: React.MouseEvent, session: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const title = session.messages?.[0]?.content || "Untitled Project";
+    setSessionToDelete({ id: session.id, title });
   };
 
   const filteredSessions = useMemo(() => {
@@ -164,8 +201,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="px-3 pb-2">
             <div className="relative">
               <input
+                id="workspace-search-input"
                 type="text"
-                placeholder="Filter workspaces..."
+                placeholder="Filter workspaces... (⌘K)"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-7 pr-2 py-1.5 bg-[#161922] light:bg-slate-50 border border-white/[0.06] light:border-black/[0.07] rounded-md text-[11px] text-white light:text-slate-900 placeholder-slate-500 focus:outline-none focus:border-blue-500/50"
@@ -218,8 +256,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
                 {!isCollapsed && (
                   <button
-                    onClick={(e) => handleDeleteSession(e, session.id)}
-                    className="absolute right-2 p-1 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-rose-400 rounded transition-all"
+                    onClick={(e) => promptDeleteSession(e, session)}
+                    className="absolute right-2 p-1 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-rose-400 rounded transition-all focus:opacity-100"
                     title="Delete project"
                     aria-label="Delete session"
                   >
@@ -292,6 +330,66 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex-1 flex flex-col overflow-hidden relative">
         {children}
       </div>
+
+      {/* Deletion Confirmation Guardrail Modal */}
+      {sessionToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
+          <div 
+            className="w-full max-w-sm bg-[#0f1117] light:bg-white border border-white/[0.1] light:border-black/[0.1] rounded-xl p-5 shadow-2xl space-y-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center flex-shrink-0">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 6h18" />
+                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                </svg>
+              </div>
+              <div>
+                <h3 id="delete-dialog-title" className="text-sm font-semibold text-white light:text-slate-900">
+                  Delete Workspace?
+                </h3>
+                <p className="text-[11px] text-slate-400 light:text-slate-500 mt-0.5">
+                  This action is permanent and cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-[#161922] light:bg-slate-50 border border-white/[0.06] light:border-black/[0.06] text-xs font-mono text-slate-300 light:text-slate-700 truncate">
+              &ldquo;{sessionToDelete.title}&rdquo;
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setSessionToDelete(null)}
+                disabled={isDeleting}
+                className="px-3 py-1.5 text-xs font-medium text-slate-300 light:text-slate-700 hover:bg-white/[0.06] light:hover:bg-black/[0.05] rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSession}
+                disabled={isDeleting}
+                className="px-3.5 py-1.5 text-xs font-medium bg-rose-600 hover:bg-rose-500 text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Delete Project</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

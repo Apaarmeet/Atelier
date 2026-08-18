@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +13,52 @@ const QUICK_ITERATIONS = [
   "Add interactive animations"
 ];
 
+interface ToolCallData {
+  name: string;
+  actionType: "create" | "modify" | "command" | "generic";
+  target: string;
+  lineCount?: number;
+  contentPreview?: string;
+  rawArgs: string;
+}
+
+interface TerminalLog {
+  id: string;
+  command: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+}
+
+function parseToolCall(tc: any): ToolCallData {
+  const name = tc.function?.name || tc.name || "tool";
+  const rawArgs = tc.function?.arguments || tc.arguments || "";
+  let parsed: any = {};
+  try {
+    parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+  } catch {
+    parsed = {};
+  }
+
+  const target = parsed.path || parsed.target || parsed.file || parsed.command || parsed.name || "";
+  let actionType: ToolCallData["actionType"] = "generic";
+  if (name.includes("create") || name.includes("write") || name.includes("add")) actionType = "create";
+  else if (name.includes("edit") || name.includes("patch") || name.includes("update")) actionType = "modify";
+  else if (name.includes("cmd") || name.includes("command") || name.includes("exec") || name.includes("install")) actionType = "command";
+
+  const codeContent = parsed.content || parsed.code || parsed.replacement || "";
+  const lineCount = codeContent ? codeContent.split("\n").length : undefined;
+
+  return {
+    name,
+    actionType,
+    target: target || name,
+    lineCount,
+    contentPreview: codeContent || (typeof parsed === "object" && Object.keys(parsed).length > 0 ? JSON.stringify(parsed, null, 2) : rawArgs),
+    rawArgs: typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs, null, 2)
+  };
+}
+
 export default function ChatDashboardPage() {
   const { sessionId } = useParams();
   const [messages, setMessages] = useState<any[]>([]);
@@ -20,9 +66,33 @@ export default function ChatDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [podName, setPodName] = useState<string>("");
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   
-  // Resizable split pane state
+  // Right Pane Tab: "preview" | "code"
+  const [activePaneTab, setActivePaneTab] = useState<"preview" | "code">("preview");
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileContentCache, setFileContentCache] = useState<Record<string, string>>({});
+  const [liveSandboxFiles, setLiveSandboxFiles] = useState<string[]>([]);
+  const [isLoadingFile, setIsLoadingFile] = useState(false);
+  
+  // Retractable Integrated Terminal State (Inside Code & Files tab)
+  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(true);
+  const [terminalHeight, setTerminalHeight] = useState<number>(200);
+  const [isTerminalDragging, setIsTerminalDragging] = useState<boolean>(false);
+  const [terminalLogs, setTerminalLogs] = useState<TerminalLog[]>([
+    {
+      id: "init",
+      command: "",
+      stdout: "Atelier Terminal — Connected to E2B Sandbox (/home/user/app)\nType any bash command (e.g. `ls -la`, `npm list`, `cat package.json`)\n"
+    }
+  ]);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [isExecutingCmd, setIsExecutingCmd] = useState(false);
+  const [cmdHistory, setCmdHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+
+  // Resizable split pane state (Chat width)
   const [chatWidth, setChatWidth] = useState<number>(440);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [deviceMode, setDeviceMode] = useState<"responsive" | "tablet" | "mobile">("responsive");
@@ -30,39 +100,115 @@ export default function ChatDashboardPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalScrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef<boolean>(true);
 
-  // Track if user is scrolled near bottom
+  // Combine touched files from tool calls with live sandbox files
+  const allFilesList = useMemo(() => {
+    const set = new Set<string>();
+    liveSandboxFiles.forEach(f => set.add(f));
+    messages.forEach(msg => {
+      if (msg.toolCalls && Array.isArray(msg.toolCalls)) {
+        msg.toolCalls.forEach((tc: any) => {
+          const parsed = parseToolCall(tc);
+          if (parsed.target && (parsed.target.includes("/") || parsed.target.includes("."))) {
+            set.add(parsed.target.replace(/^\/home\/user\/app\//, ''));
+          }
+        });
+      }
+    });
+    return Array.from(set).sort();
+  }, [liveSandboxFiles, messages]);
+
+  // Fetch real file list from sandbox
+  const fetchSandboxFiles = useCallback(async () => {
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/files`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.files)) {
+        setLiveSandboxFiles(data.files);
+      }
+    } catch {
+      // transient
+    }
+  }, [sessionId]);
+
+  // Load single file content directly from sandbox
+  const loadFileContent = useCallback(async (filePath: string) => {
+    setSelectedFile(filePath);
+    if (fileContentCache[filePath]) return;
+
+    setIsLoadingFile(true);
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/files/content?path=${encodeURIComponent(filePath)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFileContentCache(prev => ({ ...prev, [filePath]: data.content || "" }));
+      }
+    } catch {
+      // fallback
+    } finally {
+      setIsLoadingFile(false);
+    }
+  }, [sessionId, fileContentCache]);
+
+  // Default selection when files arrive
+  useEffect(() => {
+    if (allFilesList.length > 0 && !selectedFile) {
+      const defaultFile = allFilesList.find(f => f.includes("App.") || f.includes("main.")) || allFilesList[0];
+      if (defaultFile) {
+        loadFileContent(defaultFile);
+      }
+    }
+  }, [allFilesList, selectedFile, loadFileContent]);
+
+  // Auto-fetch sandbox files when opening code tab
+  useEffect(() => {
+    if (activePaneTab === "code") {
+      fetchSandboxFiles();
+    }
+  }, [activePaneTab, fetchSandboxFiles]);
+
+  // Track scroll position
   const handleChatScroll = () => {
     if (!chatScrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = chatScrollRef.current;
     isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
   };
 
-  // Dragging logic for split pane
+  // Dragging logic for left/right split pane
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
   };
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDragging || !containerRef.current) return;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const newWidth = e.clientX - containerRect.left;
-    const minWidth = 320;
-    const maxWidth = Math.min(containerRect.width - 340, 900);
-    
-    if (newWidth >= minWidth && newWidth <= maxWidth) {
-      setChatWidth(newWidth);
+    if (isDragging && containerRef.current) {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const newWidth = e.clientX - containerRect.left;
+      const minWidth = 320;
+      const maxWidth = Math.min(containerRect.width - 340, 900);
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        setChatWidth(newWidth);
+      }
     }
-  }, [isDragging]);
+
+    if (isTerminalDragging) {
+      const newHeight = window.innerHeight - e.clientY;
+      if (newHeight >= 80 && newHeight <= 450) {
+        setTerminalHeight(newHeight);
+      }
+    }
+  }, [isDragging, isTerminalDragging]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
+    setIsTerminalDragging(false);
   }, []);
 
   useEffect(() => {
-    if (isDragging) {
+    if (isDragging || isTerminalDragging) {
       window.addEventListener("mousemove", handleMouseMove);
       window.addEventListener("mouseup", handleMouseUp);
     } else {
@@ -73,9 +219,39 @@ export default function ChatDashboardPage() {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+  }, [isDragging, isTerminalDragging, handleMouseMove, handleMouseUp]);
+
+  // Divider keyboard resize
+  const handleDividerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      setChatWidth(prev => Math.max(320, prev - 20));
+    } else if (e.key === "ArrowRight") {
+      setChatWidth(prev => Math.min(900, prev + 20));
+    }
+  };
 
   // Fetch messages and preview url
+  const fetchMessages = useCallback(async () => {
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/messages`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const newMsgs = data.messages || [];
+
+      setMessages(prev => {
+        const pendingErrors = prev.filter(m => m.status === "error");
+        if (isAtBottomRef.current) {
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
+        return [...newMsgs, ...pendingErrors.filter(pe => !newMsgs.some((nm: any) => nm.id === pe.id))];
+      });
+    } catch {
+      // transient network poll
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     const storedUrl = sessionStorage.getItem(`preview-${sessionId}`);
     const storedPod = sessionStorage.getItem(`podName-${sessionId}`);
@@ -98,50 +274,119 @@ export default function ChatDashboardPage() {
     fetchMessages();
     const interval = setInterval(fetchMessages, 3000);
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, fetchMessages]);
 
-  const fetchMessages = async () => {
-    try {
-      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/messages`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const newMsgs = data.messages || [];
-
-      setMessages(prev => {
-        if (isAtBottomRef.current) {
-          setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-          }, 100);
-        }
-        return newMsgs;
-      });
-    } catch (err) {
-      // transient network poll
-    }
-  };
-
-  const handleSendMessage = async (textToSend?: string) => {
+  const handleSendMessage = async (textToSend?: string, retryId?: string) => {
     const messageContent = textToSend || prompt;
-    if (!messageContent.trim() || !podName) return;
-    setLoading(true);
-    setPrompt("");
+    if (!messageContent.trim()) return;
     
-    setMessages(prev => [...prev, { role: "user", content: messageContent }]);
+    const msgId = retryId || `temp-${Date.now()}`;
+    setLoading(true);
+    if (!retryId) setPrompt("");
+    
+    setMessages(prev => {
+      const filtered = prev.filter(m => m.id !== msgId);
+      return [...filtered, { id: msgId, role: "user", content: messageContent, status: "sending" }];
+    });
+
     isAtBottomRef.current = true;
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 100);
 
     try {
-      await fetch(`${ORCHESTRATOR_URL}/api/session/${sessionId}/message`, {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/session/${sessionId}/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: messageContent, podName }),
+        body: JSON.stringify({ content: messageContent, podName: podName || "default" }),
       });
+
+      if (!res.ok) {
+        throw new Error("Failed to deliver message to orchestrator");
+      }
+
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "sent" } : m));
+      // Refresh files after sending message
+      setTimeout(fetchSandboxFiles, 2000);
     } catch (err) {
       console.error("Error sending message", err);
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "error" } : m));
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Run terminal command
+  const handleExecuteTerminalCommand = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!terminalInput.trim() || isExecutingCmd) return;
+
+    const cmd = terminalInput.trim();
+    setTerminalInput("");
+    setIsExecutingCmd(true);
+    setCmdHistory(prev => [...prev, cmd]);
+    setHistoryIndex(null);
+
+    const logId = `cmd-${Date.now()}`;
+    setTerminalLogs(prev => [...prev, { id: logId, command: cmd }]);
+
+    try {
+      const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/terminal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      });
+      const data = await res.json();
+      
+      setTerminalLogs(prev => prev.map(log => {
+        if (log.id === logId) {
+          return {
+            ...log,
+            stdout: data.stdout,
+            stderr: data.stderr,
+            exitCode: data.exitCode
+          };
+        }
+        return log;
+      }));
+
+      // Refresh files in case the command added/removed files
+      fetchSandboxFiles();
+    } catch (err: any) {
+      setTerminalLogs(prev => prev.map(log => {
+        if (log.id === logId) {
+          return { ...log, stderr: `Execution failed: ${err.message}`, exitCode: 1 };
+        }
+        return log;
+      }));
+    } finally {
+      setIsExecutingCmd(false);
+      setTimeout(() => {
+        if (terminalScrollRef.current) {
+          terminalScrollRef.current.scrollTop = terminalScrollRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  };
+
+  const handleTerminalKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (cmdHistory.length === 0) return;
+      const nextIdx = historyIndex === null ? cmdHistory.length - 1 : Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIdx);
+      setTerminalInput(cmdHistory[nextIdx] || "");
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIndex === null) return;
+      const nextIdx = historyIndex + 1;
+      if (nextIdx >= cmdHistory.length) {
+        setHistoryIndex(null);
+        setTerminalInput("");
+      } else {
+        setHistoryIndex(nextIdx);
+        setTerminalInput(cmdHistory[nextIdx] || "");
+      }
     }
   };
 
@@ -153,16 +398,24 @@ export default function ChatDashboardPage() {
     }
   };
 
-  const copyToolContent = (text: string, idx: number) => {
+  const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
-    setCopiedIndex(idx);
-    setTimeout(() => setCopiedIndex(null), 1500);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
   };
+
+  const toggleToolExpand = (key: string) => {
+    setExpandedTools(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const currentDisplayedContent = selectedFile 
+    ? (fileContentCache[selectedFile] || "Loading file contents from sandbox...")
+    : "Select a file to inspect code";
 
   return (
     <div ref={containerRef} className="flex h-full w-full relative select-none bg-[#090a0e] light:bg-[#fbfbfa] text-slate-100 light:text-slate-900 font-sans transition-colors duration-200">
       {/* Drag overlay */}
-      {isDragging && <div className="fixed inset-0 z-50 cursor-col-resize select-none" />}
+      {(isDragging || isTerminalDragging) && <div className="fixed inset-0 z-50 cursor-col-resize select-none" />}
 
       {/* Left Chat Pane */}
       <div 
@@ -194,23 +447,44 @@ export default function ChatDashboardPage() {
             
             const isUser = msg.role === "user";
             const toolCalls = msg.toolCalls;
+            const isError = msg.status === "error";
             
             return (
               <div key={msg.id || idx} className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
                 
                 {/* Role Eyebrow */}
-                <div className="text-[10px] font-mono text-slate-400 light:text-slate-500 uppercase tracking-wider mb-1 px-1">
-                  {isUser ? "Engineer" : "Atelier Synthesizer"}
+                <div className="text-[10px] font-mono text-slate-400 light:text-slate-500 uppercase tracking-wider mb-1 px-1 flex items-center gap-2">
+                  <span>{isUser ? "Engineer" : "Atelier Synthesizer"}</span>
+                  {isError && (
+                    <span className="text-rose-400 text-[9px] lowercase font-sans font-medium flex items-center gap-1">
+                      ⚠️ failed to send
+                    </span>
+                  )}
                 </div>
 
                 {msg.content && (
                   <div className={`max-w-[92%] p-3.5 text-xs leading-relaxed rounded-xl shadow-sm ${
                     isUser 
-                    ? "bg-blue-600 light:bg-blue-700 text-white font-medium shadow-blue-600/10" 
+                    ? isError
+                      ? "bg-rose-500/15 border border-rose-500/30 text-rose-200 light:text-rose-800"
+                      : "bg-blue-600 light:bg-blue-700 text-white font-medium shadow-blue-600/10" 
                     : "bg-[#161922] light:bg-white text-slate-200 light:text-slate-800 border border-white/[0.08] light:border-black/[0.07]"
                   }`}>
                     {isUser ? (
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      <div className="flex flex-col gap-1.5">
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        {isError && (
+                          <div className="pt-1.5 border-t border-rose-500/20 flex items-center justify-between text-[11px]">
+                            <span className="text-rose-400 font-mono text-[10px]">Network timeout</span>
+                            <button
+                              onClick={() => handleSendMessage(msg.content, msg.id)}
+                              className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium text-[10px] transition-colors"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="prose prose-invert light:prose-slate prose-xs max-w-none prose-p:leading-relaxed prose-pre:bg-[#090a0e] prose-pre:border prose-pre:border-white/[0.08]">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -221,29 +495,65 @@ export default function ChatDashboardPage() {
                   </div>
                 )}
                 
-                {/* Agent Tool Execution Badges */}
+                {/* Agent Tool Execution Badges (Parsed & Expandable) */}
                 {!isUser && toolCalls && Array.isArray(toolCalls) && toolCalls.map((tc: any, i: number) => {
-                  const fnName = tc.function?.name || "tool";
-                  const args = tc.function?.arguments || "";
-                  const toolKey = idx * 100 + i;
+                  const toolKey = `tc-${idx}-${i}`;
+                  const parsed = parseToolCall(tc);
+                  const isExpanded = expandedTools[toolKey] || false;
                   
                   return (
-                    <div key={i} className="mt-2 w-full max-w-[92%] bg-[#090a0e] light:bg-slate-900 border border-white/[0.08] rounded-lg p-2.5 font-mono text-[11px] text-slate-300 shadow-inner">
-                      <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/[0.06]">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                          <span className="font-semibold text-[10px] uppercase text-amber-400">Tool: {fnName}</span>
+                    <div key={i} className="mt-2 w-full max-w-[92%] bg-[#0f1117] light:bg-slate-50 border border-white/[0.08] light:border-black/[0.08] rounded-lg p-2.5 font-mono text-[11px] shadow-sm transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 truncate pr-2">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            parsed.actionType === "create" ? "bg-emerald-400" :
+                            parsed.actionType === "modify" ? "bg-amber-400" : "bg-blue-400"
+                          }`} />
+                          <span className={`text-[9px] uppercase px-1.5 py-0.2 rounded font-bold tracking-wider ${
+                            parsed.actionType === "create" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                            parsed.actionType === "modify" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" :
+                            "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                          }`}>
+                            {parsed.actionType === "create" ? "CREATED" : parsed.actionType === "modify" ? "MODIFIED" : "COMMAND"}
+                          </span>
+                          <span className="text-slate-300 light:text-slate-700 truncate font-semibold">
+                            {parsed.target}
+                          </span>
+                          {parsed.lineCount && (
+                            <span className="text-[10px] text-slate-500 hidden sm:inline">
+                              +{parsed.lineCount} lines
+                            </span>
+                          )}
                         </div>
-                        <button
-                          onClick={() => copyToolContent(args, toolKey)}
-                          className="text-[9px] text-slate-400 hover:text-white transition-colors"
-                        >
-                          {copiedIndex === toolKey ? "✓ Copied" : "Copy"}
-                        </button>
+
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button
+                            onClick={() => copyToClipboard(parsed.contentPreview || parsed.rawArgs, toolKey)}
+                            className="text-[9px] text-slate-400 hover:text-white light:hover:text-slate-900 transition-colors px-1 cursor-pointer"
+                            title="Copy code"
+                          >
+                            {copiedKey === toolKey ? "✓ Copied" : "Copy"}
+                          </button>
+                          <button
+                            onClick={() => toggleToolExpand(toolKey)}
+                            className="p-0.5 text-slate-400 hover:text-white light:hover:text-slate-900 rounded transition-colors cursor-pointer"
+                            title={isExpanded ? "Collapse code" : "Expand code"}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform duration-150 ${isExpanded ? "rotate-180" : ""}`}>
+                              <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
-                      <div className="text-slate-400 overflow-x-auto whitespace-pre-wrap break-all text-[10px] max-h-24 overflow-y-auto font-mono">
-                        {args}
-                      </div>
+
+                      {/* Expandable Code Content */}
+                      {isExpanded && (
+                        <div className="mt-2 pt-2 border-t border-white/[0.06] light:border-black/[0.06]">
+                          <pre className="text-[10px] text-slate-400 light:text-slate-600 max-h-48 overflow-y-auto whitespace-pre-wrap break-all bg-[#090a0e] light:bg-slate-100 p-2 rounded border border-white/[0.04] light:border-black/[0.04] select-text">
+                            {parsed.contentPreview}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -262,7 +572,7 @@ export default function ChatDashboardPage() {
                   <button
                     key={i}
                     onClick={() => handleSendMessage(suggestion)}
-                    className="px-2.5 py-1 rounded-md text-[11px] bg-[#161922] light:bg-white hover:bg-[#1e222e] light:hover:bg-slate-100 text-slate-300 light:text-slate-700 border border-white/[0.06] light:border-black/[0.07] shadow-sm transition-colors"
+                    className="px-2.5 py-1 rounded-md text-[11px] bg-[#161922] light:bg-white hover:bg-[#1e222e] light:hover:bg-slate-100 text-slate-300 light:text-slate-700 border border-white/[0.06] light:border-black/[0.07] shadow-sm transition-colors cursor-pointer"
                   >
                     + {suggestion}
                   </button>
@@ -289,7 +599,7 @@ export default function ChatDashboardPage() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   handleSendMessage();
                 }
@@ -300,7 +610,7 @@ export default function ChatDashboardPage() {
             <button 
               onClick={() => handleSendMessage()}
               disabled={loading || !prompt.trim()}
-              className="absolute right-2 bottom-2 p-1.5 bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white rounded-lg disabled:opacity-40 transition-colors shadow-sm"
+              className="absolute right-2 bottom-2 p-1.5 bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white rounded-lg disabled:opacity-40 transition-colors shadow-sm cursor-pointer"
               title="Send instructions (Enter)"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -312,75 +622,137 @@ export default function ChatDashboardPage() {
         </div>
       </div>
 
-      {/* Draggable Divider Handle */}
+      {/* Accessible Draggable Divider Handle */}
       <div 
+        role="separator"
+        tabIndex={0}
+        aria-valuenow={chatWidth}
+        aria-valuemin={320}
+        aria-valuemax={900}
+        aria-orientation="vertical"
+        aria-label="Resize chat and preview panels"
         onMouseDown={handleMouseDown}
-        className={`w-1.5 hover:w-2 bg-[#090a0e] light:bg-slate-200 hover:bg-blue-600 light:hover:bg-blue-600 cursor-col-resize flex-shrink-0 transition-all group z-30 flex items-center justify-center border-r border-white/[0.08] light:border-black/[0.07] ${
+        onKeyDown={handleDividerKeyDown}
+        className={`w-1.5 hover:w-2 bg-[#090a0e] light:bg-slate-200 hover:bg-blue-600 light:hover:bg-blue-600 cursor-col-resize flex-shrink-0 transition-all group z-30 flex items-center justify-center border-r border-white/[0.08] light:border-black/[0.07] outline-none focus:ring-1 focus:ring-blue-500 ${
           isDragging ? "bg-blue-600" : ""
         }`}
-        title="Drag to resize split pane"
+        title="Drag or use Left/Right arrows to resize"
       >
         <div className={`w-0.5 h-8 rounded-full transition-colors ${isDragging ? "bg-white" : "bg-slate-600 light:bg-slate-400 group-hover:bg-white"}`} />
       </div>
 
-      {/* Right Live Preview Pane */}
+      {/* Right Studio Workspace (Live Preview OR Code & Files with Retractable Terminal) */}
       <div className="flex-1 bg-[#090a0e] light:bg-[#fbfbfa] flex flex-col overflow-hidden relative">
-        {/* Preview Control Toolbar */}
+        {/* Workspace Mode Switcher Toolbar */}
         <div className="h-14 px-4 bg-[#0c0d12] light:bg-[#ffffff] border-b border-white/[0.08] light:border-black/[0.07] flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
-            {/* Status Beacon */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 light:text-emerald-700 text-xs font-mono">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 light:bg-emerald-600 animate-pulse" />
-              <span>Sandbox Live</span>
+            {/* View Mode Toggle: Preview vs Code */}
+            <div className="flex items-center gap-1 bg-[#161922] light:bg-slate-100 p-0.5 rounded-lg border border-white/[0.06] light:border-black/[0.06] text-xs font-medium">
+              <button
+                onClick={() => setActivePaneTab("preview")}
+                className={`px-3 py-1 rounded-md transition-colors text-xs flex items-center gap-1.5 cursor-pointer ${
+                  activePaneTab === "preview" 
+                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
+                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
+                }`}
+              >
+                <span>Live Preview</span>
+              </button>
+              <button
+                onClick={() => setActivePaneTab("code")}
+                className={`px-3 py-1 rounded-md transition-colors text-xs flex items-center gap-1.5 cursor-pointer ${
+                  activePaneTab === "code" 
+                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
+                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
+                }`}
+              >
+                <span>Code & Files</span>
+                {allFilesList.length > 0 && (
+                  <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded-full font-mono">
+                    {allFilesList.length}
+                  </span>
+                )}
+              </button>
             </div>
 
             <div className="h-4 w-px bg-white/[0.08] light:border-black/[0.07] hidden sm:block" />
 
-            {/* Device Switcher */}
-            <div className="flex items-center gap-1 bg-[#161922] light:bg-slate-100 p-0.5 rounded-lg border border-white/[0.06] light:border-black/[0.06] text-xs font-medium">
-              <button
-                onClick={() => setDeviceMode("responsive")}
-                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
-                  deviceMode === "responsive" 
-                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
-                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
-                }`}
-              >
-                Responsive
-              </button>
-              <button
-                onClick={() => setDeviceMode("tablet")}
-                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
-                  deviceMode === "tablet" 
-                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
-                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
-                }`}
-              >
-                Tablet (768px)
-              </button>
-              <button
-                onClick={() => setDeviceMode("mobile")}
-                className={`px-2.5 py-1 rounded-md transition-colors text-xs ${
-                  deviceMode === "mobile" 
-                  ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm border border-white/[0.08] light:border-black/[0.06]" 
-                  : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900"
-                }`}
-              >
-                Mobile (375px)
-              </button>
-            </div>
+            {/* Device Switcher (when in preview tab) */}
+            {activePaneTab === "preview" && (
+              <div className="hidden md:flex items-center gap-1 bg-[#161922] light:bg-slate-100 p-0.5 rounded-lg border border-white/[0.06] light:border-black/[0.06] text-xs font-medium">
+                <button
+                  onClick={() => setDeviceMode("responsive")}
+                  className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+                    deviceMode === "responsive" 
+                    ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm" 
+                    : "text-slate-400 hover:text-white light:hover:text-slate-900"
+                  }`}
+                >
+                  Fluid
+                </button>
+                <button
+                  onClick={() => setDeviceMode("tablet")}
+                  className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+                    deviceMode === "tablet" 
+                    ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm" 
+                    : "text-slate-400 hover:text-white light:hover:text-slate-900"
+                  }`}
+                >
+                  768px
+                </button>
+                <button
+                  onClick={() => setDeviceMode("mobile")}
+                  className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
+                    deviceMode === "mobile" 
+                    ? "bg-[#222836] light:bg-white text-white light:text-slate-900 shadow-sm" 
+                    : "text-slate-400 hover:text-white light:hover:text-slate-900"
+                  }`}
+                >
+                  375px
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5">
-            <button
-              onClick={refreshPreview}
-              className="p-1.5 text-slate-400 hover:text-white light:hover:text-slate-900 hover:bg-white/[0.06] light:hover:bg-black/[0.05] rounded-md transition-colors"
-              title="Refresh live preview"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 0.57-8.38l5.67-5.67" />
-              </svg>
-            </button>
+            {activePaneTab === "code" && (
+              <>
+                <button
+                  onClick={fetchSandboxFiles}
+                  className="px-2.5 py-1 text-slate-400 hover:text-white light:hover:text-slate-900 hover:bg-white/[0.06] light:hover:bg-black/[0.05] rounded-md transition-colors text-xs font-mono flex items-center gap-1 cursor-pointer"
+                  title="Rescan sandbox disk"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 0.57-8.38l5.67-5.67" />
+                  </svg>
+                  <span>Sync</span>
+                </button>
+
+                <button
+                  onClick={() => setIsTerminalOpen(prev => !prev)}
+                  className={`px-2.5 py-1 rounded-md transition-colors text-xs font-mono flex items-center gap-1.5 cursor-pointer ${
+                    isTerminalOpen 
+                    ? "bg-blue-600/20 text-blue-400 border border-blue-500/30" 
+                    : "text-slate-400 hover:text-white hover:bg-white/[0.06]"
+                  }`}
+                  title="Toggle integrated terminal (⌘`)"
+                >
+                  <span>&gt;_ Terminal</span>
+                </button>
+              </>
+            )}
+
+            {activePaneTab === "preview" && (
+              <button
+                onClick={refreshPreview}
+                className="p-1.5 text-slate-400 hover:text-white light:hover:text-slate-900 hover:bg-white/[0.06] light:hover:bg-black/[0.05] rounded-md transition-colors cursor-pointer"
+                title="Refresh live preview"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 0.57-8.38l5.67-5.67" />
+                </svg>
+              </button>
+            )}
 
             {previewUrl && (
               <a
@@ -401,40 +773,231 @@ export default function ChatDashboardPage() {
           </div>
         </div>
 
-        {/* Viewport Frame with Simulated Browser Chrome */}
-        <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-[#090a0e] light:bg-[#fbfbfa] overflow-auto">
-          {previewUrl ? (
-            <div className={`h-full flex flex-col transition-all duration-200 rounded-xl overflow-hidden border border-white/[0.08] light:border-black/[0.08] bg-white shadow-2xl ${
-              deviceMode === "mobile"
-              ? "w-[375px] h-[667px] max-h-full ring-1 ring-white/10"
-              : deviceMode === "tablet"
-              ? "w-[768px] max-h-full ring-1 ring-white/10"
-              : "w-full"
-            }`}>
-              {/* Simulated Browser URL Bar */}
-              <div className="h-8 bg-[#11141a] light:bg-slate-100 border-b border-white/[0.08] light:border-black/[0.07] px-3 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                <div className="flex items-center gap-1.5 truncate">
-                  <span className="text-emerald-400">🔒</span>
-                  <span className="text-slate-300 light:text-slate-700 truncate">localhost:5173</span>
+        {/* Workspace Body: Preview OR VS Code Dual Studio (Code + Bottom Terminal) */}
+        <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-[#090a0e] light:bg-[#fbfbfa] overflow-hidden">
+          {activePaneTab === "preview" ? (
+            previewUrl ? (
+              <div className={`h-full flex flex-col transition-all duration-200 rounded-xl overflow-hidden border border-white/[0.08] light:border-black/[0.08] bg-white shadow-2xl ${
+                deviceMode === "mobile"
+                ? "w-[375px] h-[667px] max-h-full ring-1 ring-white/10"
+                : deviceMode === "tablet"
+                ? "w-[768px] max-h-full ring-1 ring-white/10"
+                : "w-full"
+              }`}>
+                {/* Simulated Browser URL Bar */}
+                <div className="h-8 bg-[#11141a] light:bg-slate-100 border-b border-white/[0.08] light:border-black/[0.07] px-3 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="text-emerald-400">🔒</span>
+                    <span className="text-slate-300 light:text-slate-700 truncate">localhost:5173</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500">
+                      {deviceMode === "mobile" ? "375 × 667" : deviceMode === "tablet" ? "768 × 1024" : "100%"}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-500">
-                    {deviceMode === "mobile" ? "375 × 667" : deviceMode === "tablet" ? "768 × 1024" : "100%"}
+
+                <iframe 
+                  src={previewUrl}
+                  className="w-full flex-1 border-none bg-white"
+                  title="Live Application Preview"
+                />
+              </div>
+            ) : (
+              /* Progressive Sandbox Initialization Stages */
+              <div className="flex flex-col items-center justify-center h-full max-w-sm text-slate-400 light:text-slate-600 p-6 text-center">
+                <div className="w-9 h-9 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+                <h3 className="font-semibold text-white light:text-slate-900 text-sm mb-1">
+                  Provisioning Sandbox Runtime
+                </h3>
+                <p className="text-xs text-slate-400 light:text-slate-500 mb-6">
+                  Setting up isolated E2B microVM and Vite compiler...
+                </p>
+
+                {/* Progress Stages */}
+                <div className="w-full space-y-2 text-left font-mono text-xs bg-[#0f1117] light:bg-white p-3.5 rounded-xl border border-white/[0.08] light:border-black/[0.08] shadow-sm">
+                  <div className="flex items-center gap-2 text-emerald-400">
+                    <span>✓</span>
+                    <span>Allocating MicroVM pod</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-blue-400">
+                    <div className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                    <span>Booting Vite & React 19 server</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <span>○</span>
+                    <span>Mounting live iframe bridge</span>
+                  </div>
+                </div>
+              </div>
+            )
+          ) : (
+            /* VS Code-style IDE Layout: File Tree + Code Editor + Retractable Terminal */
+            <div className="w-full h-full flex rounded-xl overflow-hidden border border-white/[0.08] light:border-black/[0.08] bg-[#0c0d12] light:bg-white shadow-xl">
+              {/* File Tree Sidebar */}
+              <div className="w-56 bg-[#0f1117] light:bg-slate-50 border-r border-white/[0.08] light:border-black/[0.08] flex flex-col flex-shrink-0">
+                <div className="p-3 border-b border-white/[0.08] light:border-black/[0.08] text-[10px] font-mono uppercase tracking-wider text-slate-400 light:text-slate-500 flex items-center justify-between">
+                  <span>Workspace Files</span>
+                  <span className="px-1.5 py-0.2 rounded bg-white/[0.06] light:bg-slate-200 text-slate-300 light:text-slate-700">
+                    {allFilesList.length}
                   </span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+                  {allFilesList.map((filePath, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => loadFileContent(filePath)}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-mono truncate flex items-center gap-2 transition-colors cursor-pointer ${
+                        selectedFile === filePath
+                        ? "bg-blue-600 text-white font-medium shadow-sm"
+                        : "text-slate-400 light:text-slate-600 hover:bg-white/[0.04] light:hover:bg-slate-100 hover:text-white"
+                      }`}
+                    >
+                      <span className="text-[10px] opacity-70">
+                        {filePath.endsWith(".jsx") || filePath.endsWith(".tsx") ? "⚛️" :
+                         filePath.endsWith(".json") ? "📋" :
+                         filePath.endsWith(".css") ? "🎨" : "📄"}
+                      </span>
+                      <span className="truncate">{filePath}</span>
+                    </button>
+                  ))}
+
+                  {allFilesList.length === 0 && (
+                    <div className="p-4 text-center text-xs text-slate-500">
+                      Loading files...
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <iframe 
-                src={previewUrl}
-                className="w-full flex-1 border-none bg-white"
-                title="Live Application Preview"
-              />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400 light:text-slate-600 p-6 text-center">
-              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
-              <p className="font-medium text-white light:text-slate-900 text-sm">Initializing E2B MicroVM Sandbox...</p>
-              <p className="text-xs mt-1 text-slate-400 light:text-slate-500 font-mono">Starting Vite dev server on port 5173...</p>
+              {/* Right Work Area (Editor on Top + Collapsible Terminal on Bottom) */}
+              <div className="flex-1 flex flex-col bg-[#090a0e] light:bg-slate-900 overflow-hidden relative">
+                
+                {/* Code Viewer (Top Flex Area) */}
+                <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                  {selectedFile ? (
+                    <>
+                      <div className="h-10 px-4 bg-[#11141a] light:bg-slate-950 border-b border-white/[0.08] flex items-center justify-between text-xs font-mono text-slate-300 flex-shrink-0">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-blue-400">⚡</span>
+                          <span className="truncate font-semibold">{selectedFile}</span>
+                          {isLoadingFile && <span className="text-slate-500 text-[10px] animate-pulse">(fetching...)</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => copyToClipboard(currentDisplayedContent, "viewer")}
+                            className="px-2 py-1 bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 hover:text-white rounded text-[10px] transition-colors cursor-pointer"
+                          >
+                            {copiedKey === "viewer" ? "✓ Copied" : "Copy Code"}
+                          </button>
+                        </div>
+                      </div>
+                      <pre className="flex-1 p-4 overflow-auto font-mono text-xs leading-relaxed text-slate-200 select-text bg-[#090a0e] light:bg-slate-900">
+                        <code>{currentDisplayedContent}</code>
+                      </pre>
+                    </>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-slate-500 text-xs font-mono">
+                      Select a file to inspect code
+                    </div>
+                  )}
+                </div>
+
+                {/* Retractable Terminal (Bottom Panel) */}
+                {isTerminalOpen && (
+                  <div 
+                    style={{ height: `${terminalHeight}px` }} 
+                    className="flex flex-col bg-[#0b0d13] border-t border-white/[0.1] relative z-20 flex-shrink-0 shadow-2xl"
+                  >
+                    {/* Draggable Terminal Resizer Handle */}
+                    <div 
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setIsTerminalDragging(true);
+                      }}
+                      className="h-1.5 hover:h-2 bg-transparent hover:bg-blue-600/50 cursor-row-resize flex items-center justify-center transition-all group"
+                      title="Drag to resize terminal"
+                    >
+                      <div className="w-8 h-0.5 rounded-full bg-slate-600 group-hover:bg-white transition-colors" />
+                    </div>
+
+                    {/* Terminal Header Bar */}
+                    <div className="h-8 px-3 bg-[#0f1118] border-b border-white/[0.08] flex items-center justify-between text-[11px] font-mono text-slate-400 select-none">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="font-bold text-slate-200 uppercase tracking-wider text-[10px]">Terminal</span>
+                        <span className="text-[10px] text-slate-500">bash (/home/user/app)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setTerminalLogs([])}
+                          className="hover:text-white px-1.5 py-0.5 rounded hover:bg-white/[0.06] transition-colors text-[10px]"
+                          title="Clear terminal output"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          onClick={() => setIsTerminalOpen(false)}
+                          className="hover:text-white p-1 rounded hover:bg-white/[0.06] transition-colors"
+                          title="Minimize terminal"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Terminal Log Stream */}
+                    <div 
+                      ref={terminalScrollRef}
+                      className="flex-1 p-3 overflow-y-auto font-mono text-xs text-slate-200 space-y-1.5 select-text"
+                    >
+                      {terminalLogs.map(log => (
+                        <div key={log.id} className="space-y-0.5">
+                          {log.command && (
+                            <div className="flex items-center gap-1.5 text-blue-400 font-semibold">
+                              <span>user@sandbox:~/app$</span>
+                              <span className="text-white">{log.command}</span>
+                            </div>
+                          )}
+                          {log.stdout && (
+                            <pre className="text-slate-300 whitespace-pre-wrap text-[11px] leading-relaxed">
+                              {log.stdout}
+                            </pre>
+                          )}
+                          {log.stderr && (
+                            <pre className="text-rose-400 whitespace-pre-wrap text-[11px] leading-relaxed">
+                              {log.stderr}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                      {isExecutingCmd && (
+                        <div className="flex items-center gap-2 text-amber-400 text-[11px] animate-pulse">
+                          <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                          <span>Running command in sandbox...</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Terminal Input Prompt */}
+                    <form 
+                      onSubmit={handleExecuteTerminalCommand}
+                      className="h-9 px-3 border-t border-white/[0.08] bg-[#090a0e] flex items-center gap-2 text-xs font-mono"
+                    >
+                      <span className="text-emerald-400 font-bold flex-shrink-0">user@sandbox:~/app$</span>
+                      <input 
+                        type="text"
+                        value={terminalInput}
+                        onChange={(e) => setTerminalInput(e.target.value)}
+                        onKeyDown={handleTerminalKeyDown}
+                        placeholder="Type bash command (e.g. ls -la, npm list, cat vite.config.js)..."
+                        className="flex-1 bg-transparent text-white focus:outline-none placeholder-slate-600 text-xs"
+                      />
+                    </form>
+                  </div>
+                )}
+
+              </div>
             </div>
           )}
         </div>
@@ -442,3 +1005,4 @@ export default function ChatDashboardPage() {
     </div>
   );
 }
+

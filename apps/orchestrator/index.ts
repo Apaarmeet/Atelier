@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { agentLoop } from "./agent/loop";
 import { prisma } from "@repo/db";
-import { createSandboxPod, forwardPodPort, deleteSandboxPod } from "./agent/e2b";
+import { createSandboxPod, forwardPodPort, deleteSandboxPod, getOrConnectSandbox, readFileFromPod, execCommandInPod } from "./agent/e2b";
 
 // Load environment variables
 const PORT = process.env.PORT || 3001;
@@ -173,6 +173,72 @@ app.get("/api/sessions/:id/preview", async (req, res) => {
     const podName = session.sandboxId || session.id;
     const portData = await forwardPodPort(podName);
     return res.json({ previewUrl: portData.url, podName: session.sandboxId || podName });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// List all files in the sandbox workspace
+app.get("/api/sessions/:id/files", async (req, res) => {
+  try {
+    const session = await prisma.session.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    const podName = session.sandboxId || session.id;
+    const sandbox = await getOrConnectSandbox(podName);
+
+    // List all files in /home/user/app omitting node_modules, .git, and build artifacts
+    const result = await sandbox.commands.run(
+      'find . -maxdepth 5 -not -path "*/node_modules*" -not -path "*/.*" -not -path "*/dist*" -not -path "*/build*"',
+      { cwd: '/home/user/app' }
+    );
+
+    const files = (result.stdout || "")
+      .split('\n')
+      .map(p => p.replace(/^\.\//, '').trim())
+      .filter(p => p && p !== '.');
+
+    return res.json({ files });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Read file content directly from the sandbox
+app.get("/api/sessions/:id/files/content", async (req, res) => {
+  try {
+    const filePath = req.query.path as string;
+    if (!filePath) return res.status(400).json({ error: "path query parameter is required" });
+
+    const session = await prisma.session.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    const podName = session.sandboxId || session.id;
+    const content = await readFileFromPod(podName, filePath);
+    return res.json({ content, path: filePath });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Execute interactive terminal command in sandbox
+app.post("/api/sessions/:id/terminal", async (req, res) => {
+  try {
+    const { command, cwd } = req.body;
+    if (!command) return res.status(400).json({ error: "command is required" });
+
+    const session = await prisma.session.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    const podName = session.sandboxId || session.id;
+    const result = await execCommandInPod(podName, command, cwd);
+    return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
