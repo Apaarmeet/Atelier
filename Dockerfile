@@ -8,7 +8,7 @@ COPY apps/orchestrator/package.json ./apps/orchestrator/
 COPY packages/db/package.json ./packages/db/
 
 # Install dependencies
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy the rest of the application code
 COPY . .
