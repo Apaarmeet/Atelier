@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ORCHESTRATOR_URL } from "@/lib/config";
+import ClaudeThinkingLoader from "@/lib/ClaudeThinkingLoader";
 
 const QUICK_ITERATIONS = [
   "Add dark mode support",
@@ -64,6 +65,7 @@ export default function ChatDashboardPage() {
   const [messages, setMessages] = useState<any[]>([]);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [podName, setPodName] = useState<string>("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -236,7 +238,29 @@ export default function ChatDashboardPage() {
       const res = await fetch(`${ORCHESTRATOR_URL}/api/sessions/${sessionId}/messages`);
       if (!res.ok) return;
       const data = await res.json();
-      const newMsgs = data.messages || [];
+      const newMsgs: any[] = data.messages || [];
+
+      // Determine running state directly from backend flag with fallback to last message role
+      let isRunning = false;
+      if (typeof data.isRunning === "boolean") {
+        isRunning = data.isRunning;
+      } else if (newMsgs.length > 0) {
+        const lastMsg = newMsgs[newMsgs.length - 1];
+        // If last message is from user or tool, agent is still working
+        if (lastMsg.role === "user" || lastMsg.role === "tool") {
+          isRunning = true;
+        } else if (lastMsg.role === "assistant" && lastMsg.content && !lastMsg.toolCalls) {
+          isRunning = false;
+        }
+      }
+
+      // If backend reports agent has finished, clear all loading and active flags
+      if (!isRunning) {
+        setIsAgentRunning(false);
+        setLoading(false);
+      } else {
+        setIsAgentRunning(true);
+      }
 
       setMessages(prev => {
         const pendingErrors = prev.filter(m => m.status === "error");
@@ -272,9 +296,11 @@ export default function ChatDashboardPage() {
     }
 
     fetchMessages();
-    const interval = setInterval(fetchMessages, 3000);
+    // Fast polling (1.5s) while agent is running, standard (3s) when idle
+    const pollInterval = (isAgentRunning || loading) ? 1500 : 3000;
+    const interval = setInterval(fetchMessages, pollInterval);
     return () => clearInterval(interval);
-  }, [sessionId, fetchMessages]);
+  }, [sessionId, fetchMessages, isAgentRunning, loading]);
 
   const handleSendMessage = async (textToSend?: string, retryId?: string) => {
     const messageContent = textToSend || prompt;
@@ -282,6 +308,7 @@ export default function ChatDashboardPage() {
     
     const msgId = retryId || `temp-${Date.now()}`;
     setLoading(true);
+    setIsAgentRunning(true);
     if (!retryId) setPrompt("");
     
     setMessages(prev => {
@@ -306,15 +333,18 @@ export default function ChatDashboardPage() {
       }
 
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "sent" } : m));
-      // Refresh files after sending message
       setTimeout(fetchSandboxFiles, 2000);
+      // Immediately trigger a message poll to catch early tool output
+      setTimeout(fetchMessages, 800);
     } catch (err) {
       console.error("Error sending message", err);
       setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "error" } : m));
-    } finally {
       setLoading(false);
+      setIsAgentRunning(false);
     }
   };
+
+
 
   // Run terminal command
   const handleExecuteTerminalCommand = async (e: React.FormEvent) => {
@@ -562,7 +592,7 @@ export default function ChatDashboardPage() {
           })}
 
           {/* Quick Iteration Suggestion Chips */}
-          {messages.length > 0 && !loading && (
+          {messages.length > 0 && !loading && !isAgentRunning && (
             <div className="pt-2">
               <div className="text-[10px] font-mono text-slate-400 light:text-slate-500 uppercase tracking-wider mb-2">
                 Quick Iterations
@@ -581,11 +611,15 @@ export default function ChatDashboardPage() {
             </div>
           )}
 
-          {loading && (
-            <div className="flex items-center gap-2 text-xs font-mono text-slate-400 light:text-slate-600 p-2.5 bg-[#161922] light:bg-white rounded-lg border border-white/[0.08] light:border-black/[0.07] w-fit shadow-sm">
-              <div className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-              <span>Agent inspecting files & compiling code...</span>
-            </div>
+          {/* Claude Code Style Dynamic Thinking Loader */}
+          {(loading || isAgentRunning) && (
+            <ClaudeThinkingLoader 
+              activeTool={
+                messages.length > 0 && messages[messages.length - 1]?.toolCalls?.[0]?.function?.name
+                  ? messages[messages.length - 1].toolCalls[0].function.name
+                  : undefined
+              }
+            />
           )}
 
           <div ref={messagesEndRef} />
@@ -593,34 +627,44 @@ export default function ChatDashboardPage() {
 
         {/* Message Input Box */}
         <div className="absolute bottom-0 w-full p-3 bg-gradient-to-t from-[#0c0d12] via-[#0c0d12]/90 to-transparent light:from-white light:via-white/90">
-          <div className="relative bg-[#161922] light:bg-slate-50 border border-white/[0.08] light:border-black/[0.08] rounded-xl overflow-hidden shadow-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
+          <div className={`relative bg-[#161922] light:bg-slate-50 border ${
+            isAgentRunning || loading ? "border-blue-500/40 ring-1 ring-blue-500/20" : "border-white/[0.08] light:border-black/[0.08]"
+          } rounded-xl overflow-hidden shadow-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all`}>
             <textarea
-              placeholder="Direct the synthesizer (e.g. Add dark theme switcher, add charts...)"
+              placeholder={isAgentRunning || loading ? "Agent is currently synthesizing code..." : "Direct the synthesizer (e.g. Add dark theme switcher, add charts...)"}
               value={prompt}
+              disabled={isAgentRunning || loading}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  handleSendMessage();
+                  if (!isAgentRunning && !loading) {
+                    handleSendMessage();
+                  }
                 }
               }}
-              className="w-full bg-transparent text-white light:text-slate-900 p-3 pr-10 resize-none focus:outline-none max-h-28 text-xs placeholder-slate-500 light:placeholder-slate-400"
+              className="w-full bg-transparent text-white light:text-slate-900 p-3 pr-10 resize-none focus:outline-none max-h-28 text-xs placeholder-slate-500 light:placeholder-slate-400 disabled:opacity-60 disabled:cursor-not-allowed"
               rows={2}
             />
             <button 
               onClick={() => handleSendMessage()}
-              disabled={loading || !prompt.trim()}
+              disabled={loading || isAgentRunning || !prompt.trim()}
               className="absolute right-2 bottom-2 p-1.5 bg-blue-600 hover:bg-blue-500 light:bg-blue-700 light:hover:bg-blue-800 text-white rounded-lg disabled:opacity-40 transition-colors shadow-sm cursor-pointer"
               title="Send instructions (Enter)"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
+              {isAgentRunning || loading ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              )}
             </button>
           </div>
         </div>
       </div>
+
 
       {/* Accessible Draggable Divider Handle */}
       <div 

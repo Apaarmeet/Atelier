@@ -14,10 +14,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// In-memory active running sessions tracker
+const activeSessions = new Set<string>();
+
 // Delete a session and kill its sandbox
 app.delete("/api/sessions/:id", async (req, res) => {
   try {
     const sessionId = req.params.id;
+    activeSessions.delete(sessionId);
     const session = await prisma.session.findUnique({
       where: { id: sessionId }
     });
@@ -80,10 +84,15 @@ app.post("/api/session", async (req, res) => {
     const previewUrl = portData.url;
     console.log(`Sandbox exposed at ${previewUrl}`);
 
-    // Run the agent loop in the background, passing the sessionId and podName
-    agentLoop(session.id, podName).catch(err => {
-      console.error(`Agent error for session ${session.id}:`, err);
-    });
+    // Mark active and run agent loop in background
+    activeSessions.add(session.id);
+    agentLoop(session.id, podName)
+      .catch(err => {
+        console.error(`Agent error for session ${session.id}:`, err);
+      })
+      .finally(() => {
+        activeSessions.delete(session.id);
+      });
 
     return res.json({
       sessionId: session.id,
@@ -118,10 +127,15 @@ app.post("/api/session/:id/message", async (req, res) => {
       }
     });
 
-    // Run the agent loop in the background
-    agentLoop(sessionId, podName).catch(err => {
-      console.error(`Agent error for session ${sessionId}:`, err);
-    });
+    // Mark active and run agent loop in background
+    activeSessions.add(sessionId);
+    agentLoop(sessionId, podName)
+      .catch(err => {
+        console.error(`Agent error for session ${sessionId}:`, err);
+      })
+      .finally(() => {
+        activeSessions.delete(sessionId);
+      });
 
     return res.json({ success: true, message: "Message queued and agent started." });
   } catch (err: any) {
@@ -148,18 +162,21 @@ app.get("/api/users/:id/sessions", async (req, res) => {
   }
 });
 
-// Get messages for a session
+// Get messages for a session (with isRunning state)
 app.get("/api/sessions/:id/messages", async (req, res) => {
   try {
+    const sessionId = req.params.id;
     const messages = await prisma.message.findMany({
-      where: { sessionId: req.params.id },
+      where: { sessionId },
       orderBy: { createdAt: 'asc' },
     });
-    return res.json({ messages });
+    const isRunning = activeSessions.has(sessionId);
+    return res.json({ messages, isRunning });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 // Re-establish or fetch the preview URL for a session
 app.get("/api/sessions/:id/preview", async (req, res) => {
